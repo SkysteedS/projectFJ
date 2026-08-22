@@ -13,10 +13,13 @@ projectFJ/Logs/
 projectFJ/UserSettings/
 projectFJ/MemoryCaptures/
 projectFJ/Recordings/
+projectFJ/sysinfo.txt
 
 # ---------- IDE / compiler generated files ----------
 projectFJ/**/*.csproj
+projectFJ/**/*.csproj.meta
 projectFJ/**/*.sln
+projectFJ/**/*.sln.meta
 projectFJ/**/*.suo
 projectFJ/**/*.user
 projectFJ/**/*.userprefs
@@ -32,4 +35,8 @@ projectFJ/**/*.VC.VC.opendb
 # ---------- IDE directories ----------
 .vs/
 .idea/
-.vscode/
+**/.vscode/
+
+# ---------- Personal progress notes (not tracked / not shared) ----------
+progress-abstract/*
+!progress-abstract/README.md
