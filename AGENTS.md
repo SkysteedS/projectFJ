@@ -12,6 +12,7 @@
 1. **（新克隆/新机器首次）初始化 git 钩子**：若未配置过，先执行 `git config core.hooksPath git-hooks` 与 `git lfs install`，否则 20MB 守卫与 LFS 推送钩子不会生效。
 2. **检查并初始化记忆目录**：确认 `progress-abstract/` 下存在 `index.md`、`仍然需要留意的推进/`、`已过时的推进/`；若缺失，按 [progress-abstract/README.md](progress-abstract/README.md) 的结构说明初始化。
 3. **读取近期修改索引**：读取 `progress-abstract/index.md`，掌握近期修改内容。
+4. **检查当前分支**：确认是否位于非 main 分支；若在 main 上，先创建并切换到新功能分支（`feature/<用户名>-<功能>`）再开始工作。
 
 ## 记忆维护规则（progress-abstract）
 
