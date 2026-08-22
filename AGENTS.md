@@ -24,7 +24,7 @@
 - **编译/生成内容禁止入库**：`Library/`、`Logs/`、`Temp/`、`Obj/`、`Build/`、`Builds/`、`UserSettings/` 以及 `*.sln`、`*.csproj` 等 IDE/编译产物一律不追踪（由 `.gitignore` 保证）。
 - **大资产走 LFS**：超过 20MB 的资产必须由 Git LFS 管理；`.gitattributes` 已覆盖常见二进制类型，另有 pre-commit 钩子拦截未走 LFS 的超限文件。
 - **提交规范**：提交保持小而完整、语义清晰，提交信息使用中文。
-- **分支策略**：原则上每次推送都通过独立分支进行，推送到远端分支后等待管理员 fetch。
+- **分支策略**：每次开发在独立分支上进行，分支命名 `feature/<用户名>-<功能>`；完成后推送远端分支并开 PR，由管理员 Squash and merge 合入 main；合并后回到 main 同步并删除本地分支。main 的保护规则由管理员在 GitHub 规则集中配置。
 
 ## Git 提交/推送时机
 
