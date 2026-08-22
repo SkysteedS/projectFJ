@@ -1,0 +1,26 @@
+#!/bin/sh
+# Reject staged files larger than 20 MB that are not handled by Git LFS.
+
+LIMIT_BYTES=$((20 * 1024 * 1024))
+
+git diff --cached --name-only -z --diff-filter=ACMR |
+while IFS= read -r -d '' file; do
+    # Only inspect files that exist in the working tree
+    [ -f "$file" ] || continue
+
+    set -- $(wc -c < "$file")
+    size=$1
+
+    if [ "$size" -gt "$LIMIT_BYTES" ]; then
+        case "$(git check-attr filter -- "$file")" in
+            *"filter: lfs"*)
+                continue
+                ;;
+        esac
+        echo "error: '$file' is $size bytes (> 20 MB) and is NOT handled by Git LFS."
+        echo "       Add a matching 'filter=lfs' pattern to .gitattributes before committing."
+        exit 1
+    fi
+done
+
+exit 0

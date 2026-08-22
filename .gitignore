@@ -1,0 +1,35 @@
+# ---------- OS files ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- Unity generated directories ----------
+projectFJ/Library/
+projectFJ/Temp/
+projectFJ/Obj/
+projectFJ/Build/
+projectFJ/Builds/
+projectFJ/Logs/
+projectFJ/UserSettings/
+projectFJ/MemoryCaptures/
+projectFJ/Recordings/
+
+# ---------- IDE / compiler generated files ----------
+projectFJ/**/*.csproj
+projectFJ/**/*.sln
+projectFJ/**/*.suo
+projectFJ/**/*.user
+projectFJ/**/*.userprefs
+projectFJ/**/*.pidb
+projectFJ/**/*.booproj
+projectFJ/**/*.svd
+projectFJ/**/*.pdb
+projectFJ/**/*.mdb
+projectFJ/**/*.opendb
+projectFJ/**/*.VC.db
+projectFJ/**/*.VC.VC.opendb
+
+# ---------- IDE directories ----------
+.vs/
+.idea/
+.vscode/
