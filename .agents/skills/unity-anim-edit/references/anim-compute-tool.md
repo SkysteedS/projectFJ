@@ -120,3 +120,18 @@ measure → diagnose in numbers (elevation/azimuth, fold plane) → calibrate ra
 → reverse-solve deltas → apply atomically → re-measure → refit with the newest
 point. Each round's motor skill: the newest measurement is the only one that
 matters locally; the user's visual verdict still closes the loop.
+
+Practical details of the loop:
+
+- The tool writes `Temp/anim_bone_info.txt` and OVERWRITES it — snapshot every
+  run (`anim_tools.py bones <file> --save <label>`). **Do not rely on `Temp/`
+  for long-term storage**: Unity wipes it (it disappeared mid-session once);
+  keep snapshots in the repo root/workspace or any folder outside `Assets/`.
+- After each write, click the Unity Editor to trigger re-import. A
+  "main object name ''" warning or empty clip → Reimport once; if it persists,
+  the bytes are corrupted (lone-CR check), not the importer.
+- When committing: even a commit with no LFS files trips the repo's pre-commit
+  hook, which spawns `sh.exe` — under a restricted sandbox that fails with
+  `sh.exe: couldn't create signal pipe, Win32 error 5`. Escalate the exact
+  same commit command once (wider permissions) and it succeeds; do not work
+  around it with a different command.

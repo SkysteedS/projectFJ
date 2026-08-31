@@ -30,13 +30,17 @@ vocabulary one-to-one and gives measurable targets.
 Every step below is implemented in `scripts/anim_tools.py` (pure stdlib):
 
 ```
-anim_tools.py bones  <bone_info.txt>     # u/f/n/w, elevations, azimuths, bend
+anim_tools.py bones  <bone_info.txt> --save <label>   # u/f/n/w, elevations, azimuths, bend
+                                                # --save snapshots each measured state
 anim_tools.py solve  <bone_info.txt> --upper-az-delta 18 --target-elev 25 --target-az 0
     # per side: theta / phi / achieved direction / suggested FB+Twist+Stretch deltas
 anim_tools.py calibrate --state "-0.25,a.txt" --state "0.30,b.txt" --state "0.98,c.txt" --query 0.63
 anim_tools.py apply  <anim> --deltas "Left Arm Twist In-Out:0.48,Left Forearm Stretch:-0.28"
 anim_tools.py diff   <anim> <backup>     # exact line diff + lone-CR check
 ```
+
+Keep every measured state (`--save`) — `calibrate` is only as good as the
+history; archive outside `Temp/` (Unity wipes it).
 
 Rates/signs are CLI flags (`--rate-frontback`, `--rate-twist`, `--stretch-calib`,
 `--fb-sign`, `--twist-sign`) — see `scripts/README.md`.

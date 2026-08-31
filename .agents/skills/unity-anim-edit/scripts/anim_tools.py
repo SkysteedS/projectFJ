@@ -118,6 +118,19 @@ def cmd_apply(args):
 
 def cmd_bones(args):
     muscles, bones, lines = A.parse_bone_info(args.info)
+    req = [s + b for s in SIDES for b in ("UpperArm", "LowerArm", "Hand")]
+    missing = [b for b in req if b not in bones]
+    if missing:
+        print("no usable bone positions in %s (missing: %s) - is this the tool's "
+              "section B output?" % (args.info, ", ".join(missing)))
+        return
+    if args.save:
+        import shutil
+        base = os.path.splitext(os.path.basename(args.info))[0]
+        dst = os.path.join(os.path.dirname(os.path.abspath(args.info)),
+                           "%s_%s.txt" % (base, args.save))
+        shutil.copyfile(args.info, dst)
+        print("snapshot saved:", dst)
     for side in SIDES:
         u, f = A.upper_arm_forearm(bones, side)
         n, w = A.hinge_frame(u, f)
@@ -250,6 +263,9 @@ def main():
 
     q = sub.add_parser("bones", help="analyze AnimComputeWindow bone info")
     q.add_argument("info")
+    q.add_argument("--save",
+                   help='snapshot the info file as <name>_<label>.txt (keep each '
+                        'measured state - calibrate needs history)')
     q.set_defaults(func=cmd_bones)
 
     q = sub.add_parser("solve", help="reverse-solve forearm target + inward swing")

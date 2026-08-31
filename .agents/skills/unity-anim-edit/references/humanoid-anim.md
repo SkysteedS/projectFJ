@@ -132,6 +132,13 @@ horizontal. Treat these as coupled, not independent.
 > and bind pose. **Re-verify each per rig** by previewing in the editor (or asking
 > the user) rather than trusting these as rules.
 
+**Fast per-rig sign/neutral check from sibling clips:** scan the same-rig clips
+(e.g. `jump down`, `jump loop`, `idle`) for the same muscle — where its value
+sits relative to a known pose (like "arms horizontal when Down-Up ≈ 0") anchors
+both the sign and the neutral value without a single new measurement. Then
+calibrate the rate with 2+ measured states. (On the jump rig,
+`Shoulder+Arm Down-Up ≈ 0` ⇔ arms horizontal pinned the first anchor.)
+
 | Muscle | Positive means | Note |
 |---|---|---|
 | `Arm Front-Back` | swing BACK | negative = forward |
@@ -197,8 +204,13 @@ filename". The usual cause is line-ending corruption, not the muscle content:
 - **Verify, and don't be fooled:** compare lines EXACTLY (no `rstrip('\r')` —
   that masks `\r\r\n` vs `\r\n`!) and assert the written bytes contain **zero**
   lone `\r` (`re.findall(r"\r(?!\n)", text)` must be empty, and CRLF count must
-  equal the total line count). Keep backups OUTSIDE `Assets/` (e.g. in `Temp/`),
-  or Unity will import them.
+  equal the total line count). Keep backups in the repo root / workspace —
+  **`Temp/` gets wiped by Unity** (observed mid-session) and a new `.anim`
+  inside `Assets/` would be imported.
+- **Unity-side repair steps:** click the Editor window to trigger the
+  re-import; if the "main object name ''" warning or an empty clip persists,
+  right-click the asset → **Reimport** once, then run the lone-CR check — the
+  bytes are corrupted, not the importer.
 - Editing a clip **in place** (same path, same meta GUID) is safe and avoids
   GUID churn; the skill's "copy + fresh GUID" rule applies to the first
   deliverable, later iterations can keep the identity.
@@ -219,8 +231,11 @@ hooks (`core.hooksPath`, `pre-commit`/`pre-push`) that spawn `sh.exe`. In a
 restricted sandbox, `git add`/`git commit` on `.anim` files can fail because the
 LFS clean filter and hooks need subprocess + named-pipe access (error like
 `sh.exe: couldn't create signal pipe ... Win32 error 5`). Non-LFS files stage
-fine. If you must commit from a sandbox, escalate permissions to run the LFS
-filter and hooks; otherwise ask the user to run the commit in their own terminal.
+fine. **Observed in practice:** even a commit containing only plain-text skill
+files fails at commit time because the pre-commit hook itself spawns `sh.exe`.
+Escalate the EXACT same commit command once (wider permissions) — that succeeds;
+don't detour through a different command. Otherwise ask the user to run the
+commit in their own terminal.
 
 ## 8. Verification limits
 

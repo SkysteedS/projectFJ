@@ -63,8 +63,11 @@ writes `Temp/anim_bone_info.txt`:
 - **B** = per-bone world/local transforms of the applied pose,
 - **C** = `GetHumanPose` read-back (C ≈ A ⇒ the pose applied, B trustworthy).
 
-Snapshot each run — the tool overwrites the same file, and later iterations'
-measurements are the only clean way to calibrate rates.
+**Snapshot every run:** the tool overwrites the same file, and later
+calibration needs the history — `anim_tools.py bones <file> --save <label>`
+copies it to `<name>_<label>.txt`. **Do not archive under `Temp/`** — Unity
+cleans/wipes it on exit (it disappeared mid-session here); use the repo root or
+any persistent folder outside `Assets/`.
 
 `anim_tools.py bones <file>` turns section B into the numbers you reason with:
 segment directions, elevations (`asin(dy)`), azimuths (`atan2(dx, dz)`), elbow
@@ -99,6 +102,12 @@ Then choose the strategy:
   whose rate/sign is uncalibrated (typically `Arm Twist`) and expect one
   correction round.
 
+**Shortcut: judge sign and neutral pose from sibling clips.** Same-rig clips
+(e.g. `jump down` vs `jump loop`) show how muscle value 0 / a known value maps
+to geometry — on the jump rig, `Shoulder+Arm Down-Up ≈ 0` meant "arms
+horizontal", which pinned the first calibration anchor without any extra
+measurement.
+
 ## 4. Compute the deltas
 
 - **Baseline shift (the default tool):** add a constant delta to EVERY keyframe
@@ -109,6 +118,10 @@ Then choose the strategy:
 - **Calibrate each muscle's °/unit rate** (rig-specific, nonlinear — measured
   44 → 57.5°/unit as the arm on one rig; quadratic fit through 3 measured
   points worked): `anim_tools.py calibrate --state "net,file" ...`.
+- **Prediction is only for the first pass.** A fitted formula is a model; the
+  next measurement is the truth (predicted +17°, measured +13.6° on the jump
+  rig). From the second iteration on, solve from the LATEST measured state —
+  that converged in one round, while formula-based passes needed two.
 - **Reverse solve for precise targets:** `anim_tools.py solve <bone_info>
   --upper-az-delta D --target-elev E --target-az A` returns the elbow bend θ,
   plane twist φ and the resulting `Front-Back`/`Twist`/`Stretch` deltas.
@@ -142,7 +155,16 @@ in verification (it masks this bug). Details: `references/humanoid-anim.md` §6b
   planned value lines + `m_Name`), same `value:` count, and **lone-CR count = 0**.
 - New baselines with `min ≠ max` per changed muscle (breathing kept).
 - Re-run the measurement tool on the copy: C ≈ A and B shows the intended
-  geometry. Keep iteration backups OUTSIDE `Assets/` (e.g. `Temp/`).
+  geometry. Keep iteration backups in the repo root / workspace — **never in
+  `Temp/`** (Unity wipes it) and never as a new `.anim` inside `Assets/`.
+
+### In Unity after each write
+
+Click the Editor window to trigger the re-import (same path + same meta GUID
+means assets refresh automatically). If the console shows the "main object
+name ''" warning or the clip looks empty, right-click the asset → **Reimport**
+once; if it persists, run the lone-CR check on the bytes first — corruption is
+probable, the importer is not.
 
 ## 7. Hand off to the user
 

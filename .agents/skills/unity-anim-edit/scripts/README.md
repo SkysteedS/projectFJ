@@ -8,14 +8,30 @@ anim_tools.py info      .anim 结构解析（属性/关键帧/时长/循环/段�
 anim_tools.py diff      a b   逐行精确 diff + EOL 损坏检查
 anim_tools.py apply     .anim --deltas "Mus:delta,..." [--name X]
                            常量基线偏移（呼吸保留）、EOL 安全原子写入、自动备份
-anim_tools.py bones     anim_bone_info.txt
+anim_tools.py bones     anim_bone_info.txt [--save label]
                            工具输出解析：方向/仰角/方位角/肘部折叠平面 (n,w)/肌值
+                           --save 把本次测量快照为 <name>_<label>.txt（标定需要历史）
 anim_tools.py solve     anim_bone_info.txt [--upper-az-delta D] [--target-elev E]
                            [--target-az A] [--rate-* ] [--*-sign]
                            反解：目标小臂世界方向 → 弯角θ/平面扭转φ → 肌肉增量
 anim_tools.py calibrate --state "net,file" ... [--side Left] [--query net]
                            2-3 个实测状态拟合 仰角(net) 响应率（线性/二次）
 ```
+
+## Invocation
+
+Run from the repo root with absolute or quoted paths (spaces in `used animation`
+paths need quotes). Write analysis to a script file, not `python -c` — inline
+commands through PowerShell get mangled by quoting/escaping:
+
+```powershell
+python .agents\skills\unity-anim-edit\scripts\anim_tools.py bones `
+  "D:\unity\program\projectFJ\projectFJ\Temp\anim_bone_info.txt" --save iter3
+```
+
+**Archive snapshots and backups in the repo root / a persistent folder — NOT
+in `Temp/`**: Unity wipes `projectFJ/Temp` on exit/cleanup (it vanished
+mid-session once); `calibrate` needs the history to exist.
 
 ## The loop it supports (each step is a command)
 
