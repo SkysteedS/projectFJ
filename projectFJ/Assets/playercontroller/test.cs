@@ -49,7 +49,7 @@ public class playercontroller : MonoBehaviour
 
     #region 输入参数
     [Header("输入")]
-    [SerializeField] PlayerInputState input = new PlayerInputState();
+    [SerializeField] TestPlayerInputState input = new TestPlayerInputState();
     #endregion
 
     #region 运动状态
@@ -654,9 +654,10 @@ public class playercontroller : MonoBehaviour
 #region 输入状态
 /// <summary>
 /// 输入参数：只管"玩家按了什么"，不关心怎么用。
+/// 注意：正式输入层已由 PlayerInputState.cs 承担，本类保留仅供 test.cs 使用（Test 前缀隔离）。
 /// </summary>
 [System.Serializable]
-public class PlayerInputState
+public class TestPlayerInputState
 {
     public Vector2 move;    // WASD 输入
     public bool run;        // 是否跑步
@@ -784,7 +785,7 @@ public class MotionState
     }
 
     /// <summary>更新总速度（走/跑 + 输入幅度），恒定加速度平滑。</summary>
-    public void UpdateSpeed(PlayerInputState input, float deltaTime)
+    public void UpdateSpeed(TestPlayerInputState input, float deltaTime)
     {
         targetSpeed = (input.run ? runSpeed : walkSpeed) * input.move.magnitude;
         currentSpeed = Mathf.MoveTowards(currentSpeed, targetSpeed, moveAcceleration * deltaTime);
@@ -793,7 +794,7 @@ public class MotionState
     /// <summary>
     /// 攀爬位移：输入映射到墙面切平面（W = 角色上方，S = 下方，D = 右方，A = 左方），返回本帧位移。
     /// </summary>
-    public Vector3 ComputeClimbDelta(PlayerInputState input, Vector3 wallNormal, float deltaTime)
+    public Vector3 ComputeClimbDelta(TestPlayerInputState input, Vector3 wallNormal, float deltaTime)
     {
         if (wallNormal.sqrMagnitude < 0.0001f) return Vector3.zero;
 
@@ -807,7 +808,7 @@ public class MotionState
     }
 
     /// <summary>瞄准时：把输入投影到摄像机前/右轴，得到水平/垂直速度并平滑。</summary>
-    public void UpdateAimSpeed(PlayerInputState input, Vector3 camForward, Vector3 camRight, float deltaTime)
+    public void UpdateAimSpeed(TestPlayerInputState input, Vector3 camForward, Vector3 camRight, float deltaTime)
     {
         Vector3 moveDir = camForward * input.move.y + camRight * input.move.x;
         if (moveDir.sqrMagnitude > 0.0001f)
@@ -823,7 +824,7 @@ public class MotionState
     }
 
     /// <summary>更新垂直速度与姿态：着地贴地/起跳，离地累积重力，下落速度超过阈值才进入滞空混合。</summary>
-    public void UpdateVerticalVelocity(PlayerInputState input, float deltaTime, bool canJump)
+    public void UpdateVerticalVelocity(TestPlayerInputState input, float deltaTime, bool canJump)
     {
         // 无论能否起跳都消费按下信号，避免瞄准时按下被缓冲到解除瞄准后才触发
         bool jumpPress = input.ConsumeJump();
