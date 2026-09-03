@@ -88,7 +88,7 @@
                     "initialStateCheck": false
                 },
                 {
-                    "name": "Interacct",
+                    "name": "Interact",
                     "type": "Button",
                     "id": "3229ea6f-86ae-462d-b5a7-6af682ac2bd3",
                     "expectedControlType": "",
@@ -100,6 +100,15 @@
                     "name": "HandGrenade",
                     "type": "Button",
                     "id": "b62ca5ba-2eaf-4098-b9d5-4f3a326bc11a",
+                    "expectedControlType": "",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": false
+                },
+                {
+                    "name": "QuitClimb",
+                    "type": "Button",
+                    "id": "a534f88a-25ad-4327-88dd-8230d2596d40",
                     "expectedControlType": "",
                     "processors": "",
                     "interactions": "",
@@ -257,7 +266,7 @@
                     "interactions": "",
                     "processors": "",
                     "groups": "",
-                    "action": "Interacct",
+                    "action": "Interact",
                     "isComposite": false,
                     "isPartOfComposite": false
                 },
@@ -269,6 +278,17 @@
                     "processors": "",
                     "groups": "",
                     "action": "HandGrenade",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "6e8d3e20-0a72-4383-bce1-e0b61e45f530",
+                    "path": "<Keyboard>/x",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "",
+                    "action": "QuitClimb",
                     "isComposite": false,
                     "isPartOfComposite": false
                 }

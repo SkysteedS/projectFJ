@@ -31,6 +31,8 @@ public class PlayerInputState
         SlotRifle   = 1 << 4,  // 切换到步枪槽位（1）
         SlotSword   = 1 << 5,  // 切换到剑槽位（2）
         SlotGrenade = 1 << 6,  // 切换到手雷槽位（3）
+        QuitClimb   = 1 << 7,  // 退出攀爬（X）：攀爬中按下退回默认姿态
+        AimPressed  = 1 << 8,  // 瞄准按下边沿：供"切换瞄准"模式使用（按住模式由 frameAim 持久值驱动）
     }
 
     #region 实时层（适配器写入；纯运行时数据，不参与序列化，Inspector 不可见）
@@ -49,7 +51,7 @@ public class PlayerInputState
     [SerializeField] bool frameRun;
     [SerializeField] bool frameAim;
     [SerializeField] bool frameFireHeld;
-    [Tooltip("位掩码：1=Jump 2=FirePressed 4=Reload 8=Interact 16=SlotRifle 32=SlotSword 64=SlotGrenade")]
+    [Tooltip("位掩码：1=Jump 2=FirePressed 4=Reload 8=Interact 16=SlotRifle 32=SlotSword 64=SlotGrenade 128=QuitClimb 256=AimPressed")]
     [SerializeField] uint frameSignals;
     #endregion
 
@@ -71,9 +73,6 @@ public class PlayerInputState
         frameSignals &= ~bit;
         return true;
     }
-
-    /// <summary>丢弃本帧全部未消费信号（状态切换时防残留，对应 test.cs 的 CancelJump 场景）。</summary>
-    public void ClearSignals() => frameSignals = 0;
     #endregion
 
     #region 实时写入（仅 InputActionBridge / 主体类回调调用）
@@ -102,17 +101,6 @@ public class PlayerInputState
         frameSignals  = liveSignals;
         liveSignals   = 0;
     }
-
-    /// <summary>清空全部状态（禁用输入期间使用）。</summary>
-    public void Reset()
-    {
-        liveMove = frameMove = Vector2.zero;
-        liveLook = frameLook = Vector2.zero;
-        liveRun = frameRun = false;
-        liveAim = frameAim = false;
-        liveFireHeld = frameFireHeld = false;
-        liveSignals = frameSignals = 0;
-    }
     #endregion
 }
 
@@ -133,8 +121,12 @@ public static class InputActionBridge
     public static void OnRun(PlayerInputState input, UnityEngine.InputSystem.InputAction.CallbackContext ctx)
         => input.SetRun(ReadButton(ctx));
 
+    /// <summary>瞄准：按住状态 + 按下边沿信号（按住模式用持续值；切换模式消费按下边沿切换瞄准）。</summary>
     public static void OnAim(PlayerInputState input, UnityEngine.InputSystem.InputAction.CallbackContext ctx)
-        => input.SetAim(ReadButton(ctx));
+    {
+        input.SetAim(ReadButton(ctx));
+        PressOnStarted(ctx, input, PlayerInputState.Signal.AimPressed);
+    }
 
     /// <summary>开火：按住状态 + 按下边沿信号（单发武器消费信号，连发武器读 FireHeld）。</summary>
     public static void OnFire(PlayerInputState input, UnityEngine.InputSystem.InputAction.CallbackContext ctx)
@@ -160,6 +152,9 @@ public static class InputActionBridge
 
     public static void OnInteract(PlayerInputState input, UnityEngine.InputSystem.InputAction.CallbackContext ctx)
         => PressOnStarted(ctx, input, PlayerInputState.Signal.Interact);
+
+    public static void OnQuitClimb(PlayerInputState input, UnityEngine.InputSystem.InputAction.CallbackContext ctx)
+        => PressOnStarted(ctx, input, PlayerInputState.Signal.QuitClimb);
 
     static bool ReadButton(UnityEngine.InputSystem.InputAction.CallbackContext ctx)
         => ctx.ReadValue<float>() > 0f;

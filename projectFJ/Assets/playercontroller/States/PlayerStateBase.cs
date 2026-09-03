@@ -9,16 +9,15 @@ using UnityEngine;
 ///   切换顺序由 PlayerStateMachine 保证"旧.Exit → 新.Enter"串行化；
 /// - Tick：本状态内的运动与操作管理（读输入 → 计算 → 写动画参数/发起提议）；
 /// - OnAnimatorMove：本状态的位移接管策略（根运动 / 脚本接管），由主体类委托。
-///   当前为骨架：真实运动逻辑在后续 Phase 中各状态类内实现。
+///   各具体状态类已实现完整运动逻辑（速度平滑/转向/重力），数值参数见 PlayerMotionValues。
 ///
-/// 共享原则：PlayerContext 只放"跨状态共享的信息"（组件/输入/当前状态/物理标志），
-/// 行为与计算（相机轴换算等）由状态类（本基类的 protected 辅助）自行处理。
+/// 共享原则：PlayerContext 是角色各系统的共享引用集合（状态类的操作通道）——状态类经它
+/// 读共享信息、写运动状态、调用/改写组件（位移/旋转/IK target/动画参数）；
+/// 仅少数成员有意只读（输入帧快照、当前状态描述、物理事实），其撰写通道在机器/主体。
+/// 行为计算（相机轴换算等）由状态类（本基类的 protected 辅助）自行处理。
 /// </summary>
 public abstract class PlayerStateBase
 {
-    /// <summary>走廊状态标记（有明确终点的临时姿态，如登顶/翻越）；预留缺口，本阶段不启用。</summary>
-    public virtual bool IsTransient => false;
-
     public virtual void Enter(PlayerContext ctx) { }
 
     public virtual void Exit(PlayerContext ctx) { }
@@ -36,7 +35,7 @@ public abstract class PlayerStateBase
         if (ctx.MainCamera != null)
         {
             var f = Vector3.ProjectOnPlane(ctx.MainCamera.transform.forward, Vector3.up);
-            return f.sqrMagnitude > 0.0001f ? f.normalized : Vector3.forward;
+            return f.sqrMagnitude > ctx.Values.minMoveSqrMagnitude ? f.normalized : Vector3.forward;
         }
         return Vector3.forward;
     }
@@ -47,7 +46,7 @@ public abstract class PlayerStateBase
         if (ctx.MainCamera != null)
         {
             var r = Vector3.ProjectOnPlane(ctx.MainCamera.transform.right, Vector3.up);
-            return r.sqrMagnitude > 0.0001f ? r.normalized : Vector3.right;
+            return r.sqrMagnitude > ctx.Values.minMoveSqrMagnitude ? r.normalized : Vector3.right;
         }
         return Vector3.right;
     }
@@ -55,5 +54,22 @@ public abstract class PlayerStateBase
     /// <summary>WASD 输入换算为相机基准的世界方向（非瞄准移动与滞空操控共用）。</summary>
     protected static Vector3 CameraSpaceMoveDir(PlayerContext ctx)
         => (CameraForward(ctx) * ctx.Input.Move.y + CameraRight(ctx) * ctx.Input.Move.x).normalized;
+
+    /// <summary>
+    /// 移动方向（含"松开输入后的平滑衰减"语义）：
+    /// 有输入时取相机轴输入方向并记录到 Motion.HorizontalDir；无输入时沿用最后有效方向。
+    /// 这样速度标量（Motion.HorizontalSpeed）在松开输入后仍按加速率插值衰减，
+    /// 不会被"方向归零 → 速度清零"打断——动画水平速度参数随插值平滑归零，而非一帧跳零。
+    /// </summary>
+    protected static Vector3 MoveDirection(PlayerContext ctx)
+    {
+        if (ctx.Input.Move.sqrMagnitude > ctx.Values.minMoveSqrMagnitude)
+        {
+            Vector3 dir = CameraSpaceMoveDir(ctx);
+            ctx.Motion.HorizontalDir = dir;
+            return dir;
+        }
+        return ctx.Motion.HorizontalDir;
+    }
     #endregion
 }

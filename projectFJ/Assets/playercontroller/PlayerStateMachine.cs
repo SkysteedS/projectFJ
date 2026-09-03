@@ -12,10 +12,10 @@ using UnityEngine;
 public struct PlayerStateKey : IEquatable<PlayerStateKey>
 {
     public readonly PlayerHanding Handing;      // 手持装备
-    public readonly PlyaerHandPosture Hand;     // 手部操作
+    public readonly PlayerHandPosture Hand;     // 手部操作
     public readonly PlayerBodyPosture Body;     // 身体姿态
 
-    public PlayerStateKey(PlayerHanding handing, PlyaerHandPosture hand, PlayerBodyPosture body)
+    public PlayerStateKey(PlayerHanding handing, PlayerHandPosture hand, PlayerBodyPosture body)
     {
         Handing = handing;
         Hand = hand;
@@ -56,8 +56,8 @@ public class TransitionEdge
 
     /// <summary>公开构造：外层只需给三枚举（from 三项 + to 三项），无需构造键结构体。</summary>
     public TransitionEdge(
-        PlayerHanding fromHanding, PlyaerHandPosture fromHand, PlayerBodyPosture fromBody,
-        PlayerHanding toHanding, PlyaerHandPosture toHand, PlayerBodyPosture toBody,
+        PlayerHanding fromHanding, PlayerHandPosture fromHand, PlayerBodyPosture fromBody,
+        PlayerHanding toHanding, PlayerHandPosture toHand, PlayerBodyPosture toBody,
         Func<PlayerContext, bool> condition = null,
         PlayerInputState.Signal? triggerSignal = null,
         bool evaluateEveryFrame = false,
@@ -100,7 +100,7 @@ public class PlayerStateMachine
     public PlayerStateKey CurrentKey => currentKey;
 
     public PlayerBodyPosture Body => currentKey.Body;
-    public PlyaerHandPosture Hand => currentKey.Hand;
+    public PlayerHandPosture Hand => currentKey.Hand;
     public PlayerHanding Handing => currentKey.Handing;
     #endregion
 
@@ -111,7 +111,7 @@ public class PlayerStateMachine
 
     #region 注册（外层给三枚举；内部转 PlayerStateKey）
     /// <summary>注册状态：组合（三枚举）→ 状态类实例。重复组合覆盖并告警。</summary>
-    public void RegisterState(PlayerHanding handing, PlyaerHandPosture hand, PlayerBodyPosture body, PlayerStateBase state)
+    public void RegisterState(PlayerHanding handing, PlayerHandPosture hand, PlayerBodyPosture body, PlayerStateBase state)
         => RegisterState(new PlayerStateKey(handing, hand, body), state);
 
     void RegisterState(PlayerStateKey key, PlayerStateBase state)
@@ -140,7 +140,7 @@ public class PlayerStateMachine
 
     #region 生命周期
     /// <summary>进入初始状态：给组合（三枚举），Start 调用一次。</summary>
-    public void Enter(PlayerHanding handing, PlyaerHandPosture hand, PlayerBodyPosture body, PlayerContext context)
+    public void Enter(PlayerHanding handing, PlayerHandPosture hand, PlayerBodyPosture body, PlayerContext context)
     {
         ctx = context;
         currentKey = new PlayerStateKey(handing, hand, body);
@@ -163,7 +163,7 @@ public class PlayerStateMachine
 
     #region 转换裁决（唯一执行点）
     /// <summary>请求驱动：状态类提议（物理条件），给组合（三枚举）；内部精确匹配请求边。</summary>
-    public bool RequestTransition(PlayerHanding handing, PlyaerHandPosture hand, PlayerBodyPosture body)
+    public bool RequestTransition(PlayerHanding handing, PlayerHandPosture hand, PlayerBodyPosture body)
         => RequestTransition(new PlayerStateKey(handing, hand, body));
 
     bool RequestTransition(PlayerStateKey to)
@@ -185,7 +185,10 @@ public class PlayerStateMachine
 
     void SwitchTo(PlayerStateKey to, string label = null)
     {
-        Debug.Log($"[StateMachine] {currentKey} → {to}（{(string.IsNullOrEmpty(label) ? "无名边" : label)}）");
+        // 记录"本次切换是否改变了手持（武器切换）"到共享交接槽——由新状态 Enter 读取并清除，
+        // 供其启用"武器切换速度插值"（旧武器档位 → 新武器档位的时间线性过渡）。
+        ctx.Motion.HandingChanged = currentKey.Handing != to.Handing;
+
         currentState?.Exit(ctx);
         currentKey = to;
         states.TryGetValue(to, out currentState);

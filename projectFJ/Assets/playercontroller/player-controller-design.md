@@ -24,8 +24,8 @@
 | 临时姿态（登顶/翻越） | Body 轴新增"走廊状态"子类，插入 = 枚举+注册+转换表边+规则表行，不改旧状态类 | [已确认] |
 | 攀爬触发方式 | **不设独立攀爬输入**：跳跃键为统一"移动动作"请求，先做可攀爬检测，命中→直接进攀爬，未命中→跳跃 | [已确认] |
 | 能力许可表 | **随扁平化退役**：行为合法性由"状态/边的存在性"编码（无 Rifle×Climbing 状态即不可达）；状态内行为差异（如步枪不奔跑）在具体状态类内实现 | [已确认] |
-| 转换表实现 | 字典委托表（数据驱动，扩展不动旧代码）；**已落地**为"转换边列表 + 信号驱动/请求驱动"（StateMachine.cs，注册顺序=裁决优先级，信号消费与裁决分离） | [已确认] |
-| 走廊状态基类 `ActionStateBase` | 现在纳入 vs 先留 `IsTransient` 缺口 | [待确认—建议纳入] |
+| 转换表实现 | 字典委托表（数据驱动，扩展不动旧代码）；**已落地**为"转换边列表 + 信号驱动/请求驱动"（PlayerStateMachine.cs，注册顺序=裁决优先级，信号消费与裁决分离） | [已确认] |
+| 走廊状态基类 | 暂不定义：`IsTransient` 预留缺口已随死代码清理移除，登顶/翻越实现时再引入走廊状态类与基类标记 | [已确认] |
 | 手持类别建模 | 作为**装备数据**（枚举+能力声明），非状态机 | [待确认—已推荐] |
 
 ## 3. 总体架构
@@ -106,10 +106,10 @@ test.cs 中 `handing`（当前武器）从输入层**移出**：它是"游戏状
 1. **共享运动描述 `PlayerMotion`（[已实现]）**：跨状态交接槽，挂在 PlayerContext.Motion——
    当前状态类每次计算完毕写入（速度向量），新状态 `Enter` 读取初值（滞空继承起跳水平速度、
    落地读取下落速度做姿态混合）。纯数据，不含计算。
-2. **运动数值服务（Phase 2，[待实现]）**：物理常量（重力/走跑速度/加速度/旋转速度/跳跃高度/
+2. **运动数值服务（[已实现] = `PlayerMotionValues.cs`）**：物理常量（重力/走跑速度/加速度/旋转速度/跳跃高度/
    攀爬速度/死区阈值）、速度平滑（MoveTowards）、重力累积、跳跃初速度反推、姿态混合值平滑、
    垂直速度参数换算（以姿态为参数的纯函数，无分支控制流）——状态类调用它计算，结果写回
-   `PlayerContext.Motion`。
+   `PlayerContext.Motion`；跨状态交接槽为 `PlayerMotion.cs`（纯数据，状态类写入、新状态读取）。
 
 - **移除**：所有姿态分支控制流（姿态检测/切换决策）→ 移交给状态类
 - 运动交接的读写约定：**写入 = 当前状态类**（Tick/OnAnimatorMove 末尾），**读取 = 新状态**（Enter）
@@ -122,7 +122,7 @@ test.cs 中 `handing`（当前武器）从输入层**移出**：它是"游戏状
 
 ```
 三个枚举（保持正交，与 PlayerControllerScript 动画参数直接对齐）：
-  PlayerBodyPosture(Ground/Jumping/Climbing) · PlyaerHandPosture(Normal/Aiming) · PlayerHanding(Unarmed/Rifle/Sword/Grenade)
+  PlayerBodyPosture(Ground/Jumping/Climbing) · PlayerHandPosture(Normal/Aiming) · PlayerHanding(Unarmed/Rifle/Sword/Grenade)
 
 PlayerStateKey（内部键，外层不可见）：三枚举组合，当前合法组合（能力表推导）：
   Unarmed×Normal×Ground / Rifle×Normal×Ground / Sword×Normal×Ground / Grenade×Normal×Ground
@@ -145,23 +145,19 @@ PlayerStateMachine（单机）：
 ```csharp
 abstract class PlayerStateBase
 {
-    virtual bool IsTransient => false;              // 走廊状态标记
     virtual void Enter(PlayerContext ctx);
     virtual void Exit(PlayerContext ctx);
     abstract void Tick(PlayerContext ctx);
     virtual  void OnAnimatorMove(PlayerContext ctx); // 位移接管，默认为空
 }
 
-class PlayerContext   // 只读上下文，状态类唯一外部通道
+class PlayerContext   // 共享引用集合（状态类操作通道）：读共享信息 / 写运动状态 / 调用与改写组件
 {
-    Animator / CharacterController / Transform / Camera;
-    PlayerInputState Input;                 // 帧快照
-    PlayerState State;                      // 当前状态
-    PlayerBodyPosture Body;                 // 组合解析只读（供状态内查询）
-    PlyaerHandPosture Hand;
-    PlayerHanding Handing;
-    bool CanDo(PlayerAction action);        // 查能力表（状态内行为档位用）
-    void RequestTransition(PlayerState to); // 提议切换（裁决与执行在机器）
+    Animator / CharacterController / Transform / Camera / 四肢 IK 约束;
+    PlayerInputState Input;                 // 帧快照（只消费）
+    PlayerMotion Motion;                    // 共享运动描述（状态类写入，新状态 Enter 读取）
+    PlayerBodyPosture Body;                 // 当前状态描述（有意只读；修改唯一通道 = 机器裁决）
+    void RequestTransition(...);            // 提议切换（裁决与执行在机器）
 }
 ```
 
@@ -174,27 +170,27 @@ class PlayerContext   // 只读上下文，状态类唯一外部通道
 ```csharp
 // 信号边示例：Jump 二选一（注册顺序 = 优先级）；外层只给三枚举，内部转 PlayerStateKey
 machine.RegisterEdge(new TransitionEdge(
-    PlayerHanding.Unarmed, PlyaerHandPosture.Normal, PlayerBodyPosture.Ground,     // from
-    PlayerHanding.Unarmed, PlyaerHandPosture.Normal, PlayerBodyPosture.Climbing,   // to
+    PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,     // from
+    PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Climbing,   // to
     ctx => ctx.CanDo(PlayerAction.Climb) && ClimbWallDetected(ctx), Signal.Jump, label: "跳跃·攀爬检测优先"));
 machine.RegisterEdge(new TransitionEdge(
-    PlayerHanding.Unarmed, PlyaerHandPosture.Normal, PlayerBodyPosture.Ground,
-    PlayerHanding.Unarmed, PlyaerHandPosture.Normal, PlayerBodyPosture.Jumping,
+    PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+    PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping,
     ctx => ctx.CanDo(PlayerAction.Jump), Signal.Jump, label: "跳跃兜底"));
 
 // 持久边示例：瞄准进入/退出（仅步枪存在入边 → 其他武器不可瞄准）
 machine.RegisterEdge(new TransitionEdge(
-    PlayerHanding.Rifle, PlyaerHandPosture.Normal, PlayerBodyPosture.Ground,
-    PlayerHanding.Rifle, PlyaerHandPosture.Aiming, PlayerBodyPosture.Ground,
+    PlayerHanding.Rifle, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+    PlayerHanding.Rifle, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
     ctx => ctx.Input.Aim, evaluateEveryFrame: true, label: "按住瞄准"));
 machine.RegisterEdge(new TransitionEdge(
-    PlayerHanding.Rifle, PlyaerHandPosture.Aiming, PlayerBodyPosture.Ground,
-    PlayerHanding.Rifle, PlyaerHandPosture.Normal, PlayerBodyPosture.Ground,
+    PlayerHanding.Rifle, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
+    PlayerHanding.Rifle, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
     ctx => !ctx.Input.Aim, evaluateEveryFrame: true, label: "松开瞄准"));
 
 // 注册方式（工厂 + 显式组合；无需构造键类型）
-machine.RegisterState(PlayerHanding.Unarmed, PlyaerHandPosture.Normal, PlayerBodyPosture.Ground,
-    PlayerStateFactory.Create(PlayerHanding.Unarmed, PlyaerHandPosture.Normal, PlayerBodyPosture.Ground));
+machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+    PlayerStateFactory.Create(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground));
 ```
 
 **信号消费与裁决分离（关键约定，已落实）**：边条件只用 `GetSignal` 探测、不消费；信号被评估后由机器统一 `Consume` 一次（命中切换 / 未命中丢弃）。状态类只**提议**，机内 `SwitchTo` 为唯一执行点（固定 旧.Exit → 新.Enter）。
@@ -233,9 +229,10 @@ machine.RegisterState(PlayerHanding.Unarmed, PlyaerHandPosture.Normal, PlayerBod
 Assets/playercontroller/
 ├── PlayerControllerScript.cs   主体层（输入桥接·状态机集成·状态与转换边注册）    [已实现-骨架]
 ├── PlayerInputState.cs         输入层 + InputActionBridge                [已实现]
-├── PlayerStateMachine.cs       扁平单机状态机：PlayerState 枚举 + 状态字典 + 转换边表 [已实现]
-├── PlayerContext.cs            状态上下文 + 能力许可表 PlayerCapabilities  [已实现-骨架]
-├── MotionState.cs              数值层（瘦身）                            [待实现]
+├── PlayerStateMachine.cs       扁平单机状态机：PlayerStateKey 组合键 + 状态字典 + 转换边表 [已实现]
+├── PlayerContext.cs            状态上下文（共享引用集合）                    [已实现]
+├── PlayerMotion.cs             共享运动描述（跨状态交接槽，纯数据）          [已实现]
+├── PlayerMotionValues.cs       运动数值（物理常量 + 纯计算函数，Inspector 可调）[已实现]
 ├── States/  （一个状态 = 一个完整组合类）
 │   ├── PlayerStateBase.cs              [已实现]
 │   ├── Unarmed_Normal_Ground_State.cs  [已实现-骨架]
@@ -247,7 +244,7 @@ Assets/playercontroller/
 │   ├── Unarmed_Normal_Climbing_State.cs [已实现-骨架]
 │   └── (走廊状态类，按需新增)
 ├── WallProbe.cs                墙面探测工具（自 test.cs 平移，零依赖）
-└── AnimParams.cs               动画参数 Hash 集中定义
+└── （动画参数哈希）            集中于 PlayerControllerScript 顶部静态常量（Anim*）
 ```
 
 ## 8. test.cs 迁移映射（保留 / 改造 / 移除）
@@ -271,14 +268,14 @@ Assets/playercontroller/
 |---|---|---|
 | Phase 0 | 设计文档 | 完成 |
 | Phase 1 | 输入层解耦（PlayerInputState + 桥接 + test.cs 改名） | 完成 |
-| Phase 2 | 数值层 MotionState 落地 | 待做 |
+| Phase 2 | 数值层落地（PlayerMotionValues + PlayerMotion 交接槽） | 完成 |
 | Phase 3 | 状态机（扁平单机：组合状态枚举 + 单字典单边表 + 三种转换边） | **架构已完成**：7 个合法组合状态类骨架、边注册清单、非法组合天然不可达；状态内运动逻辑待做 |
 | Phase 4 | 主体类重组、回调桥接、场景接入 | 输入桥接已完成；场景接入待 Unity 侧 |
 | Phase 5 | 回归验证（对照 test.cs 行为） | 待 Phase 3/4 |
 
 ## 10. 待确认清单
 
-1. 走廊状态（登顶/翻越）：现在实现还是先留 `IsTransient` 缺口？（骨架已留虚属性）
+1. 走廊状态（登顶/翻越）：暂缓——`IsTransient` 预留缺口已随死代码清理移除；实现时新增走廊状态类 + 基类标记
 2. 切回空手的按键（如 0 键收枪）：inputactions 现无对应 action，装备互切边暂不含回空手路径
 3. `Look` 输入与相机模块的归属（本控制器只管透传？）
-4. 状态内运动逻辑（速度/旋转/重力，Phase 2 MotionState 接入）的优先级
+4. ~~状态内运动逻辑（Phase 2 MotionState 接入）的优先级~~ —— 已完成：速度/旋转/重力已落地（各状态类 + PlayerMotionValues）

@@ -18,19 +18,21 @@ public static class PlayerStateFactory
         new Dictionary<PlayerStateKey, Func<PlayerStateBase>>
         {
             // 地面 × 正常手部 × 四装备
-            { new PlayerStateKey(PlayerHanding.Unarmed, PlyaerHandPosture.Normal, PlayerBodyPosture.Ground), () => new Unarmed_Normal_Ground_State() },
-            { new PlayerStateKey(PlayerHanding.Rifle,   PlyaerHandPosture.Normal, PlayerBodyPosture.Ground), () => new Rifle_Normal_Ground_State() },
-            { new PlayerStateKey(PlayerHanding.Sword,   PlyaerHandPosture.Normal, PlayerBodyPosture.Ground), () => new Sword_Normal_Ground_State() },
-            { new PlayerStateKey(PlayerHanding.Grenade, PlyaerHandPosture.Normal, PlayerBodyPosture.Ground), () => new Grenade_Normal_Ground_State() },
+            { new PlayerStateKey(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground), () => new Unarmed_Normal_Ground_State() },
+            { new PlayerStateKey(PlayerHanding.Rifle,   PlayerHandPosture.Normal, PlayerBodyPosture.Ground), () => new Rifle_Normal_Ground_State() },
+            { new PlayerStateKey(PlayerHanding.Sword,   PlayerHandPosture.Normal, PlayerBodyPosture.Ground), () => new Sword_Normal_Ground_State() },
+            { new PlayerStateKey(PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Ground), () => new Grenade_Normal_Ground_State() },
             // 地面 × 瞄准 × 步枪
-            { new PlayerStateKey(PlayerHanding.Rifle,   PlyaerHandPosture.Aiming, PlayerBodyPosture.Ground), () => new Rifle_Aiming_Ground_State() },
+            { new PlayerStateKey(PlayerHanding.Rifle,   PlayerHandPosture.Aiming, PlayerBodyPosture.Ground), () => new Rifle_Aiming_Ground_State() },
             // 滞空 / 攀爬 × 正常手部 × 空手
-            { new PlayerStateKey(PlayerHanding.Unarmed, PlyaerHandPosture.Normal, PlayerBodyPosture.Jumping), () => new Unarmed_Normal_Jumping_State() },
-            { new PlayerStateKey(PlayerHanding.Unarmed, PlyaerHandPosture.Normal, PlayerBodyPosture.Climbing), () => new Unarmed_Normal_Climbing_State() },
+            { new PlayerStateKey(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping), () => new Unarmed_Normal_Jumping_State() },
+            { new PlayerStateKey(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Climbing), () => new Unarmed_Normal_Climbing_State() },
+            // 滞空 × 正常手部 × 步枪
+            { new PlayerStateKey(PlayerHanding.Rifle,   PlayerHandPosture.Normal, PlayerBodyPosture.Jumping), () => new Rifle_Normal_Jumping_State() },
         };
 
     /// <summary>按组合（三枚举）创建状态类实例；未注册的组合（非法/未实现）返回 null 并告警。</summary>
-    public static PlayerStateBase Create(PlayerHanding handing, PlyaerHandPosture hand, PlayerBodyPosture body)
+    public static PlayerStateBase Create(PlayerHanding handing, PlayerHandPosture hand, PlayerBodyPosture body)
     {
         var key = new PlayerStateKey(handing, hand, body);
         if (Creators.TryGetValue(key, out var creator))

@@ -1,3 +1,9 @@
+// ══════════════════════════════════════════════════════════════════════════
+// 可行性原型（保留，不再维护）：本文件已被正式角色控制器取代
+// （PlayerControllerScript + PlayerStateMachine + 各具体状态类，见 player-controller-design.md），
+// 场景/预制/其余脚本均无运行时引用；仅作为行为设计对照与回归基准保留。
+// 正式代码与原型行为出现分歧时以设计文档与正式实现为准（test.cs 只可读、不改）。
+// ══════════════════════════════════════════════════════════════════════════
 using System.Collections;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -59,7 +65,7 @@ public class playercontroller : MonoBehaviour
 
     #region 攀爬检测
     [Header("攀爬")]
-    [SerializeField] WallProbe climbProbe = new WallProbe();
+    [SerializeField] TestWallProbe climbProbe = new TestWallProbe();
     Vector3 climbWallNormal;    // 最近一次检测到的墙面法线（朝向角色）
     Vector3 climbWallPoint;     // 最近一次检测到的墙面锚点（命中点平均）
     int climbMissFrames;        // 墙面检测连续失败帧数
@@ -899,7 +905,7 @@ public class MotionState
 /// 射线从角色根 Transform 发出（不跟骨骼），探测点固定。
 /// </summary>
 [System.Serializable]
-public class WallProbe
+public class TestWallProbe
 {
     public LayerMask climbableLayer;      // 可攀爬层
     public float startHeight = 0.1f;      // 底部射线高度（避免贴地误命中）
