@@ -78,14 +78,26 @@ public class PlayerMotionValues
     public float minMoveSqrMagnitude = 0.0001f;
 
     [Header("瞄准引导（Multi-Aim 约束目标）")]
-    [Tooltip("瞄准射线距离（m）：瞄准状态从主相机中心向前的射线最大距离；未命中时瞄准目标点设为【该距离处的远点】")]
+    [Tooltip("瞄准射线距离（m）：瞄准状态从主相机中心向前的射线最大距离（命中检测上限，供准星判定/调试）")]
     public float aimRayDistance = 100f;
+
+    [Tooltip("视线远点距离（m）：枪口/头/胸的瞄准方向统一指向【相机 forward × 该距离处的远点】（不再是命中表面点）。方向随视线连续变化 → 命中↔未命中切换不再引起枪口转向跳变；近物命中时子弹（未来从出弹点沿该方向）与准星的微小视差偏移后续用弹道特效掩盖")]
+    public float aimMissPointDistance = 100f;
 
     [Tooltip("瞄准射线层掩码：射线只检测这些层。注意排除玩家自身层，否则会命中角色自己的碰撞体（默认排除 Unity 内建 Player 层 6——当前角色所在层）")]
     public LayerMask aimRayMask = ~(1 << 6);
 
-    [Tooltip("瞄准点插值率（每秒指数收敛系数，越大越快；0 = 不平滑）：每帧瞄准点 = 上一帧瞄准点与射线返回点之间的插值结果。吸收命中↔未命中远点/命中表面切换时的落点跳变，避免头与枪口在固定角度扭转")]
-    public float aimPointInterpRate = 15f;
+    [Tooltip("轴点旋转最大角速度（°/s）：瞄准时轴点 worldRotation 程序化覆盖的限速——正常跟随不受影响（远大于每帧需求），快速转身时把旋转拉成连续受控过渡（原 Multi-Aim ±限制的防甩语义由它接管）")]
+    public float aimAxisMaxRotSpeed = 720f;
+
+    [Tooltip("枪口方向 = 轴点 -Z（与原 rifle Multi-Aim 的 aimAxis=Z_NEG 装配一致）；若枪口实际朝向与轴点-Z 不符则改为 false（对应 +Z 语义）")]
+    public bool aimAxisNegZ = true;
+
+    [Tooltip("手-枪稳态握位重捕获延迟（s）：进入瞄准后等待该时长（需大于动画 crossfade，动画完成=手位稳定）再【一次性】重捕获腕-枪相对位姿锁定为稳态握位；等待期间手用进入瞬间捕获值贴枪（连续、不脱手、不穿模）")]
+    public float aimHandCaptureTime = 0.5f;
+
+    [Tooltip("稳态握位过渡时长（s）：重捕获后从进入瞬间握位平滑过渡到稳态握位的时间（手在枪上滑动，无跳变）")]
+    public float aimHandRelockBlendTime = 0.15f;
 
     [Tooltip("瞄准模式：关 = 按住右键瞄准（松开退出）；开 = 右键切换瞄准（按一次进入、再按一次退出）")]
     public bool aimToggleMode = false;
@@ -95,6 +107,10 @@ public class PlayerMotionValues
 
     [Tooltip("非瞄准时水平面左右轴速度（m/s）：角色朝向移动方向，全速计入前后轴，左右轴固定用此值（0 = 无侧移分量）")]
     public float nonAimLateralSpeed = 0f;
+
+    [Header("左手 IK 锚点（专用变量：护木锚点 = 武器的子物体 local；值已标定）")]
+    [Tooltip("左手 IK 锚点作为【武器子物体】的 local 位置——标定值（来源：原装配复合值 AK74 相对 handle (0,0.065,-0.0906) + 护木锚点相对 AK74 (0.089,-0.016,-0.158)，AK74 无旋转直接相加；已在场景标定生效，勿随意改；调整时按“场景摆枪→读该对象相对枪根 local”重标")] public Vector3 gunLeftHandAnchorLocalPosition = new Vector3(0.089f, 0.049f, -0.2486f);
+    [Tooltip("左手 IK 锚点作为【武器子物体】的 local 旋转（Euler）——标定值（来源：护木锚点相对 AK74 的旋转 (63.164,-10.148,112.995)；场景标定生效，勿随意改")] public Vector3 gunLeftHandAnchorLocalEuler = new Vector3(63.164f, -10.148f, 112.995f);
 
     [Header("攀爬")]
     [Tooltip("攀爬移动速度（m/s）：输入映射到墙面切平面后的移动速度")]

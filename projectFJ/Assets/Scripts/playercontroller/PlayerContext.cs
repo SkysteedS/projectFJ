@@ -61,6 +61,19 @@ public class PlayerContext
     public bool LastAimValid;
     /// <summary>最近一帧瞄准射线是否命中物体（false = 落点为远点）。</summary>
     public bool LastAimHit;
+
+    /// <summary>瞄准 IK 接管是否激活（瞄准状态进入设 true / 退出设 false）：轴点旋转程序化覆盖据此门控。</summary>
+    public bool AimRigActive { get; set; }
+
+    /// <summary>本帧枪口应指向的瞄准点（世界坐标；瞄准状态每帧写入：过渡期 = 角色身前点，之后 = 视线远点）。</summary>
+    public Vector3 GunAimPoint;
+
+    /// <summary>
+    /// 本帧轴点的世界旋转（确定性推进值）：瞄准状态 Tick 用 RotateTowards 推进并写入，
+    /// PlayerControllerScript.LateUpdate 据此设置轴点 worldRotation，双手 ChainIK target
+    /// 也用同一值推算——保证手/枪/轴点在同一帧使用相同旋转（消除"枪先转、手后算"的错位穿模）。
+    /// </summary>
+    public Quaternion AxisPointRotation;
     #endregion
 
     /// <summary>共享运动描述（跨状态交接槽）：当前状态类写入速度、新状态 Enter 读取（见 PlayerMotion）。</summary>

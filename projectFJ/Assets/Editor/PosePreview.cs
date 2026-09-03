@@ -15,6 +15,31 @@ public static class PosePreview
     private static readonly string OffsetsPath = Path.Combine(RootDir, "Temp", "pose_offsets.txt");
     private static readonly string OutDir = Path.Combine(RootDir, "Temp", "PosePreview");
 
+    // —— 渲染/相机预览常量（编辑器调试工具专用，语义见命名）——
+    private const float MinClipDuration = 0.001f;         // clip 时长下限（防除零）
+    private const float FallbackClipEndTime = 8.333334f;  // 无时长 clip 的兜底结束时间（s）
+    private const float KeyLightIntensity = 1.4f;         // 主光强度
+    private static readonly Color KeyLightColor = new Color(1f, 0.95f, 0.88f);      // 主光颜色（暖色）
+    private static readonly Quaternion KeyLightRotation = Quaternion.Euler(45f, -35f, 0f); // 主光方向
+    private const float FillLightIntensity = 0.5f;        // 辅光强度
+    private static readonly Color FillLightColor = new Color(0.8f, 0.85f, 1f);      // 辅光颜色（冷色）
+    private static readonly Quaternion FillLightRotation = Quaternion.Euler(20f, 140f, 0f); // 辅光方向
+    private static readonly Color BackgroundColor = new Color(0.22f, 0.22f, 0.24f); // 预览背景色
+    private const float PreviewFov = 40f;                 // 预览相机 FOV（°）
+    private const float PreviewNearPlane = 0.05f;         // 预览相机近裁剪面
+    private const float PreviewFarPlane = 100f;           // 预览相机远裁剪面
+    private const int RenderTextureSize = 1024;           // 渲染目标分辨率（像素）
+    private const int RenderTextureDepth = 24;            // 渲染目标深度位
+    private const float DefaultBoundsExtent = 2f;         // 无渲染器时包围盒默认边长（m）
+
+    // —— 各视角的相机方向（相对包围盒中心）与距离系数 ——
+    private static readonly Vector3 FrontViewDir = new Vector3(0f, 0.10f, -1f);        // 正面（略抬）
+    private static readonly Vector3 BackViewDir = new Vector3(0f, 0.10f, 1f);          // 背面（略抬）
+    private static readonly Vector3 SideViewDir = new Vector3(-1f, 0.08f, 0.10f);      // 侧面
+    private static readonly Vector3 ThreeQuarterViewDir = new Vector3(0.7f, 0.35f, -1f); // ¾ 视角
+    private const float StandardViewDistScale = 1.15f;    // 正/背/侧视角距离 = 包围盒尺寸 × 该系数
+    private const float ThreeQuarterViewDistScale = 1.25f; // ¾ 视角距离系数（略远，容纳对角）
+
     public static void Capture()
     {
         Directory.CreateDirectory(OutDir);
@@ -68,7 +93,7 @@ public static class PosePreview
 
     private static void ApplyOffsets(AnimationClip clip, Dictionary<string, float> offsets)
     {
-        float endTime = clip.length > 0.001f ? clip.length : 8.333334f;
+        float endTime = clip.length > MinClipDuration ? clip.length : FallbackClipEndTime;
         foreach (var kv in offsets)
         {
             var binding = EditorCurveBinding.FloatCurve("", typeof(Animator), kv.Key);
@@ -128,29 +153,29 @@ public static class PosePreview
         var key = new GameObject("KeyLight");
         var k = key.AddComponent<Light>();
         k.type = LightType.Directional;
-        k.intensity = 1.4f;
-        k.color = new Color(1f, 0.95f, 0.88f);
-        key.transform.rotation = Quaternion.Euler(45f, -35f, 0f);
+        k.intensity = KeyLightIntensity;
+        k.color = KeyLightColor;
+        key.transform.rotation = KeyLightRotation;
 
         var fill = new GameObject("FillLight");
         var f = fill.AddComponent<Light>();
         f.type = LightType.Directional;
-        f.intensity = 0.5f;
-        f.color = new Color(0.8f, 0.85f, 1f);
-        fill.transform.rotation = Quaternion.Euler(20f, 140f, 0f);
+        f.intensity = FillLightIntensity;
+        f.color = FillLightColor;
+        fill.transform.rotation = FillLightRotation;
 
         var camGO = new GameObject("PreviewCam");
         var cam = camGO.AddComponent<Camera>();
         cam.clearFlags = CameraClearFlags.SolidColor;
-        cam.backgroundColor = new Color(0.22f, 0.22f, 0.24f);
+        cam.backgroundColor = BackgroundColor;
 
         Bounds b = GetBounds(go);
         Vector3 center = b.center;
 
-        CaptureView(cam, tag, "front", center, new Vector3(0f, 0.10f, -1f), b.size.magnitude * 1.15f);
-        CaptureView(cam, tag, "back", center, new Vector3(0f, 0.10f, 1f), b.size.magnitude * 1.15f);
-        CaptureView(cam, tag, "side", center, new Vector3(-1f, 0.08f, 0.10f), b.size.magnitude * 1.15f);
-        CaptureView(cam, tag, "34", center, new Vector3(0.7f, 0.35f, -1f), b.size.magnitude * 1.25f);
+        CaptureView(cam, tag, "front", center, FrontViewDir, b.size.magnitude * StandardViewDistScale);
+        CaptureView(cam, tag, "back", center, BackViewDir, b.size.magnitude * StandardViewDistScale);
+        CaptureView(cam, tag, "side", center, SideViewDir, b.size.magnitude * StandardViewDistScale);
+        CaptureView(cam, tag, "34", center, ThreeQuarterViewDir, b.size.magnitude * ThreeQuarterViewDistScale);
 
         UnityEngine.Object.DestroyImmediate(camGO);
         UnityEngine.Object.DestroyImmediate(key);
@@ -161,7 +186,7 @@ public static class PosePreview
     private static Bounds GetBounds(GameObject go)
     {
         var rends = go.GetComponentsInChildren<Renderer>(true);
-        if (rends.Length == 0) return new Bounds(go.transform.position, Vector3.one * 2f);
+        if (rends.Length == 0) return new Bounds(go.transform.position, Vector3.one * DefaultBoundsExtent);
         Bounds b = rends[0].bounds;
         for (int i = 1; i < rends.Length; i++) b.Encapsulate(rends[i].bounds);
         return b;
@@ -171,11 +196,11 @@ public static class PosePreview
     {
         cam.transform.position = center + dir.normalized * dist;
         cam.transform.LookAt(center);
-        cam.fieldOfView = 40f;
-        cam.nearClipPlane = 0.05f;
-        cam.farClipPlane = 100f;
+        cam.fieldOfView = PreviewFov;
+        cam.nearClipPlane = PreviewNearPlane;
+        cam.farClipPlane = PreviewFarPlane;
 
-        var rt = new RenderTexture(1024, 1024, 24);
+        var rt = new RenderTexture(RenderTextureSize, RenderTextureSize, RenderTextureDepth);
         cam.targetTexture = rt;
         cam.Render();
         RenderTexture.active = rt;

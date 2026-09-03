@@ -65,7 +65,17 @@ public class StandbyOrientationSync : CinemachineExtension
     // 混合前轨迹探测（logBlend 时记录切换前的相机/玩家位置，用于对比混合首帧是否平滑续接移动轨迹）
     struct PreBlendSample { public Vector3 camPos; public Vector3 playerPos; }
     readonly List<PreBlendSample> preBlendSamples = new List<PreBlendSample>();
-    const int PreBlendSampleCap = 12;
+    const int PreBlendSampleCap = 12;              // 预混合采样上限（帧）
+
+    // 调试阈值（语义阈值统一命名，避免魔法数字；仅 logBlend 时参与）
+    const int RenderedTraceFrameCap = 20;          // 渲染级轨迹采样上限（帧）
+    const int LogBlendFrameCap = 20;               // 混合期间逐帧日志上限（帧）
+    const int FirstFrameWindow = 2;                // "混合首帧"判定窗口（帧）
+    const float SideMismatchTolerance = 0.03f;     // 首帧位移与预混合速度的侧向容差（m）
+    const float ForwardMismatchTolerance = 0.06f;  // 首帧位移与预混合速度的前向容差（m）
+    const float LateralOffsetWarningThreshold = 0.05f; // 侧向偏移报警阈值（m）
+    const int LateralWarningFrameCut = 8;          // 侧向报警观察窗口（混合前 ~1/3，帧）
+    const int PreBlendDumpFrames = 6;              // 预混合轨迹打印末 N 帧
 
     // 渲染级轨迹（CinemachineCore.CameraUpdatedEvent 采样——Brain 写相机之后的真实渲染位姿）
     bool renderedTraceActive;
@@ -90,7 +100,7 @@ public class StandbyOrientationSync : CinemachineExtension
     void OnRenderedCameraUpdated(CinemachineBrain updatedBrain)
     {
         if (!logBlend || updatedBrain != brain || brain == null || brain.OutputCamera == null) return;
-        if (!renderedTraceActive || renderedTraceCount >= 20) return;
+        if (!renderedTraceActive || renderedTraceCount >= RenderedTraceFrameCap) return;
 
         renderedTraceCount++;
         Debug.Log($"[CamSync]   ★渲染 f{renderedTraceCount:D2} pos={VecStr(brain.OutputCamera.transform.position)} " +
@@ -240,7 +250,7 @@ public class StandbyOrientationSync : CinemachineExtension
             // 首帧轨迹调试：对比"本帧混合结果（即将渲染）"与"主相机上一帧输出"，
             // 并把相对"混合前侦查位置"的位移分解为前向/侧向/垂直——侧向突变时醒目标记
             blendFrameIndex++;
-            if (logBlend && blendFrameIndex <= 20)
+            if (logBlend && blendFrameIndex <= LogBlendFrameCap)
             {
                 Vector3 d = state.RawPosition - preBlendAnchorPos;
                 float yawRad = preBlendAnchorYaw * Mathf.Deg2Rad;
@@ -255,13 +265,13 @@ public class StandbyOrientationSync : CinemachineExtension
                     $"Δ侦查位 前={dFwd * 100f:F1}cm 侧={dSide * 100f:F1}cm 上={d.y * 100f:F1}cm");
 
                 // 混合首帧 vs 混合前末帧：首帧位移应平滑续接预混合速度——侧向偏差 >3cm 即"开始混合即突变"
-                if (blendFrameIndex <= 2 && preBlendHasDelta)
+                if (blendFrameIndex <= FirstFrameWindow && preBlendHasDelta)
                 {
                     float vSide = Vector3.Dot(preBlendLastDelta, right);
                     float vFwd = Vector3.Dot(preBlendLastDelta, fwd);
                     Debug.Log($"[CamSync]   └首帧Δ 前={dFwd * 100f:F1}cm 侧={dSide * 100f:F1}cm 上={d.y * 100f:F1}cm | " +
                         $"预混合末帧速度 前={vFwd * 100f:F1} 侧={vSide * 100f:F1}（cm/帧）");
-                    if (!lateralWarningLogged && (Mathf.Abs(dSide - vSide) > 0.03f || Mathf.Abs(dFwd - vFwd) > 0.06f))
+                    if (!lateralWarningLogged && (Mathf.Abs(dSide - vSide) > SideMismatchTolerance || Mathf.Abs(dFwd - vFwd) > ForwardMismatchTolerance))
                     {
                         lateralWarningLogged = true;
                         Debug.Log($"[CamSync] ⚠⚠开始混合即突变 f{blendFrameIndex}：首帧位移与预混合速度不连续——" +
@@ -271,7 +281,7 @@ public class StandbyOrientationSync : CinemachineExtension
 
                 // 侧向突变标记：相对侦查位置的侧向偏移 > 5cm 且发生在混合前 ~1/3（f<=8）——
                 // 合法混合的侧向 ≈ 肩位侧偏(45cm)×w，前 8 帧正常情况下 < ~2cm；>5cm 即异常"横向先跳"
-                if (!lateralWarningLogged && Mathf.Abs(dSide) > 0.05f && blendFrameIndex <= 8)
+                if (!lateralWarningLogged && Mathf.Abs(dSide) > LateralOffsetWarningThreshold && blendFrameIndex <= LateralWarningFrameCut)
                 {
                     lateralWarningLogged = true;
                     Debug.Log($"[CamSync] ⚠⚠横向偏移 f{blendFrameIndex} 侧向偏移={dSide * 100f:F1}cm" +
@@ -366,7 +376,7 @@ public class StandbyOrientationSync : CinemachineExtension
     {
         int n = preBlendSamples.Count;
         if (n < 2) return;
-        int start = Mathf.Max(0, n - 6);
+        int start = Mathf.Max(0, n - PreBlendDumpFrames);
         for (int i = start; i < n; ++i)
         {
             var s = preBlendSamples[i];

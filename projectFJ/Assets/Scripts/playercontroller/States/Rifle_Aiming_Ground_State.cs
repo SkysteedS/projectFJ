@@ -29,6 +29,12 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
     #region 状态内结构常量（语义见注释；可调参数见 PlayerMotionValues）
     /// <summary>着地（非下落）时 falling speed 分量的常态值。</summary>
     static readonly float NoFallingSpeed = 0f;
+    /// <summary>过渡时长下限（s）：防"过渡时长为 0"导致除零/瞬间完成（Inspector 输入 0 或负值时兜底）。</summary>
+    static readonly float MinRigTransitionDuration = 0.001f;
+    /// <summary>瞄准方向平方长度下限：低于该值视为方向无效（轴点与瞄准点重合时跳过旋转）。</summary>
+    static readonly float MinAimDirSqr = 1e-6f;
+    /// <summary>无轴点时的回退基准高度（m）：以角色根上方该高度近似轴点（仅枪身前目标回退路径）。</summary>
+    static readonly float FallbackAxisHeight = 1.2f;
     #endregion
 
     float currentSpeed;         // 档位速度（走/跑 × 输入模长，跨帧平滑；瞄准轴投影的基准）
@@ -38,9 +44,9 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
     float aimYawVelocity;       // 瞄准朝向的当前角速度（°/s；SmoothDampAngle 内部状态）
     float aimAlignTimer;        // 进入对齐阶段剩余时长（>0 时用高响应平滑时间快速到位）
 
-    // —— 程序化 IK 接管（轴点只读；枪根为轴点子级；双手由枪根反推）——
+    // —— 程序化 IK 接管（轴点位置只读；旋转由 PlayerControllerScript.LateUpdate 程序化覆盖；枪根为轴点子级；双手由枪根反推）——
     Transform rigRoot;                  // 枪根（ctx.RifleRoot）
-    Transform rigPivot;                 // 轴点（ctx.AimAxisPoint；只读，不写它的 transform）
+    Transform rigPivot;                 // 轴点（ctx.AimAxisPoint；本类不写它的 transform，旋转覆盖在主体类 LateUpdate）
     Vector3 rigOffset;                  // 枪根作为轴点子级时的 localPosition（ctx.RifleAxisOffset）
     bool rigHeld;                       // true = 瞄准 IK 接管中（枪根已切到轴点下）
     Transform rigSavedParent;           // 进入前父级（优先 ctx.RightHandWrist）
@@ -52,10 +58,10 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
     float rigTransitionRemaining;       // 过渡剩余时间；>0 = 仍在进瞄准插值阶段
     float rigTransitionDuration;        // 本次过渡总时长（进入时锁定）
 
-    // 瞄准点平滑：瞄准点 = 上一帧瞄准点与射线返回点之间的指数插值（aimPointInterpRate；0 = 不平滑）。
-    // 吸收"命中 ↔ 未命中远点 / 命中表面切换"时的落点跳变，避免头/枪口在同一固定角度扭转。
-    Vector3 smoothedAimPoint;
-    bool aimPointInitialized;
+    // 瞄准方向统一 = 视线远点（相机 forward × aimMissPointDistance）：方向随视线连续变化，
+    // 命中↔未命中切换不再引起枪口/头/胸转向跳变（无需落点平滑——旧"跳变检测+追赶"已随
+    // 命中点目标删除，见 2026-09-03 记录与 UpdateAimTargets 注释）。
+    // 近物命中时子弹（未来从出弹点沿该方向）与准星的微小视差偏移由弹道特效掩盖（后续工作）。
 
     // 进入瞬间捕获的"腕-枪"常量位姿（枪根空间 local）；瞄准全程据此推算 ChainIK target 的世界位姿
     bool rightWristCaptured;
@@ -64,6 +70,25 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
     bool leftWristCaptured;
     Vector3 leftWristLocalPos;
     Quaternion leftWristLocalRot;
+
+    // 轴点当前世界旋转（状态类确定性推进：RotateTowards 限速后写入 ctx.AxisPointRotation，
+    // LateUpdate 应用它、双手 target 也用它推算——三者同帧同值，消除"枪先转、手后算"错位穿模）
+    Quaternion rigAxisRotation;
+
+    // 手-枪锁定策略：
+    // 进入瞬间一次性捕获（手立即贴枪，连续无跳，握位=进入时刻动画混合位）；
+    // 等 aimHandCaptureTime（> 动画 crossfade）后【一次性】重捕获"动画稳态握位"，
+    // 并在 aimHandRelockBlendTime 内平滑过渡（手在枪上从混合握位滑到稳态握位，无跳无脱手）。
+    // 注意：不可在 crossfade 期间每帧重捕获——每帧重捕获会让 target=动画腕位，
+    // 手被钉在动画位置（脱离程序化枪位）→ 手/枪分离观感（上一版已踩坑）。
+    bool rigHandLocked;
+    float rigRelockRemaining;
+    float rigRelockBlendRemaining;
+    float rigRelockBlendDuration;
+    Vector3 rightWristPrevPos;        // 重捕获前的旧握位快照（平滑过渡起点）
+    Quaternion rightWristPrevRot;
+    Vector3 leftWristPrevPos;
+    Quaternion leftWristPrevRot;
 
     public override void Enter(PlayerContext ctx)
     {
@@ -84,16 +109,15 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
         // 程序化 IK 接管：捕获腕-枪相对位姿 → 枪根切到轴点下 → 启动过渡
         BeginAimRig(ctx);
 
-        // 进入瞄准首帧：平滑瞄准点直接取当前落点作基准（不从旧值插值）
-        aimPointInitialized = false;
-
-        // 进入即设置瞄准引导目标（首帧目标位置正确，约束无"从旧位置追过来"的过程）
+        // 进入即设置瞄准引导目标（首帧目标位置正确，约束无"从旧位置追过来"的过程；
+        // 瞄准方向=视线远点，无跳变平滑字段）
         UpdateAimTargets(ctx);
     }
 
     public override void Exit(PlayerContext ctx)
     {
-        // 退出瞄准：枪设回进入前父级并恢复 local TRS；轴点全程不动，混合交给动画系统
+        // 退出瞄准：关闭轴点旋转程序化覆盖，枪设回进入前父级并恢复 local TRS；轴点全程不动，混合交给动画系统
+        ctx.AimRigActive = false;
         RestoreAimRig(ctx);
     }
 
@@ -150,13 +174,13 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
     }
 
     /// <summary>
-    /// 瞄准引导目标更新：从主相机中心向前发射线——
-    /// 命中 → 枪/头/胸 Multi-Aim 的 SourceObjects[0] 目标对象位置设为【命中点】；
-    /// 未命中 → 设为【射线方向 aimRayDistance 处的远点】。
-    /// 落点先与上一帧瞄准点做指数插值平滑（aimPointInterpRate），再写入目标——
-    /// 吸收"命中 ↔ 未命中 / 表面切换"时的落点跳变，避免头/枪口在固定角度扭转。
+    /// 瞄准引导目标更新：
+    /// 枪/头/胸的瞄准方向【统一 = 视线远点】（相机中心 forward × aimMissPointDistance 处的点）——
+    /// 方向随视线连续变化，命中↔未命中/表面切换不再引起转向跳变（原"命中点+跳变平滑"方案已弃用，
+    /// 视差切换是目前体感跳变的根源，方向统一到视线后该根源消失）。
+    /// 命中检测仍保留：作为准星判定/调试信息（LastAimHit/LastAimPoint），未来子弹与曳光特效使用。
     /// 枪口在"进瞄准过渡期"指向角色身前（角色可能仍在转身，若此时追相机瞄准点，
-    /// 枪口会随转身扫出大圆弧），过渡结束后切换到相机落点。
+    /// 枪口会随转身扫出大圆弧），过渡结束后切换到视线远点。
     /// 只移动目标对象 position，不改约束引用（约束装配即定，与本项目程序化 IK 目标约定一致）；
     /// 约束 weight 由动画参数经 SetIKweight 回写，本方法不参与。
     /// </summary>
@@ -165,41 +189,33 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
         Camera cam = ctx.MainCamera;
         if (cam == null) return;
 
+        // 准星判定射线：仅记录命中信息（调试/未来子弹系统），不再决定瞄准方向
         var ray = new Ray(cam.transform.position, cam.transform.forward);
         bool hit = Physics.Raycast(ray, out RaycastHit hitInfo,
                                    ctx.Values.aimRayDistance, ctx.Values.aimRayMask);
-        Vector3 rayPoint = hit ? hitInfo.point : ray.GetPoint(ctx.Values.aimRayDistance);
 
-        // 落点平滑：瞄准点 = 上一帧瞄准点与射线返回点之间的指数插值
-        // （aimPointInterpRate：每秒收敛系数，越大越快；0 = 不平滑，直接用射线落点）
-        float interpRate = ctx.Values.aimPointInterpRate;
-        if (!aimPointInitialized)
-        {
-            smoothedAimPoint = rayPoint;
-            aimPointInitialized = true;
-        }
-        else if (interpRate > 0f)
-        {
-            float t = 1f - Mathf.Exp(-interpRate * Time.deltaTime);
-            smoothedAimPoint = Vector3.Lerp(smoothedAimPoint, rayPoint, t);
-        }
-        else
-        {
-            smoothedAimPoint = rayPoint;
-        }
-        rayPoint = smoothedAimPoint;
+        // 瞄准方向目标 = 视线远点（统一、连续；近物命中时与准星的微小视差偏移由后续弹道特效掩盖）
+        Vector3 lookPoint = cam.transform.position + cam.transform.forward * ctx.Values.aimMissPointDistance;
 
-        // 记录本帧瞄准点（Scene 视图 Gizmos 调试：绿=命中 / 黄=远点；球=平滑后实际瞄准点）
-        ctx.LastAimPoint = rayPoint;
+        // 记录本帧瞄准信息（Scene 视图 Gizmos 调试：绿=命中 / 黄=未命中远点）
+        ctx.LastAimPoint = hit ? hitInfo.point : lookPoint;
         ctx.LastAimValid = true;
         ctx.LastAimHit = hit;
 
         bool transitioning = rigHeld && rigTransitionRemaining > 0f;
-        Vector3 gunTarget = transitioning ? RifleFrontTarget(ctx) : rayPoint;
+        Vector3 gunTarget = transitioning ? RifleFrontTarget(ctx) : lookPoint;
+
+        // 枪口专用瞄准点：过渡期=角色身前点（角色仍在转身对齐，不追相机落点）；
+        // 平时=视线远点。PlayerControllerScript.LateUpdate 据此覆盖轴点旋转。
+        ctx.GunAimPoint = gunTarget;
+
+        // 轴点旋转确定性推进：必须【先】于双手推算——手部 target 与 LateUpdate 写入轴点的
+        // 旋转使用同一值（ctx.AxisPointRotation），消除"枪先转、手后算"的同帧错位穿模。
+        TickAxisRotation(ctx);
 
         SetAimTargetPosition(ctx.RifleAimConstraint, gunTarget);
-        SetAimTargetPosition(ctx.HeadAimConstraint, rayPoint);
-        SetAimTargetPosition(ctx.BodyAimConstraint, rayPoint);
+        SetAimTargetPosition(ctx.HeadAimConstraint, lookPoint);
+        SetAimTargetPosition(ctx.BodyAimConstraint, lookPoint);
 
         // 瞄准全程：双手 ChainIK target 由"进入时捕获的腕-枪相对位姿 × 当前枪根位姿"推算
         UpdateHandTargets(ctx);
@@ -253,9 +269,21 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
         rigStartLocalPosition = rigRoot.localPosition;
         rigStartLocalRotation = rigRoot.localRotation;
 
-        rigTransitionDuration = Mathf.Max(0.001f, ctx.Values.aimRigTransitionTime);
+        rigTransitionDuration = Mathf.Max(MinRigTransitionDuration, ctx.Values.aimRigTransitionTime);
         rigTransitionRemaining = rigTransitionDuration;
         rigHeld = true;
+
+        // 轴点旋转推进的确定性起点 = 进入瞬间轴点当前世界旋转（RotateTowards 限速插值从此开始）
+        rigAxisRotation = rigPivot.rotation;
+
+        // 手-枪锁定：进入瞬间值先贴枪；等 aimHandCaptureTime（动画 crossfade 完成后）
+        // 一次性重捕获稳态握位并平滑过渡（见 UpdateHandTargets 注释）
+        rigHandLocked = false;
+        rigRelockRemaining = Mathf.Max(0f, ctx.Values.aimHandCaptureTime);
+        rigRelockBlendRemaining = 0f;
+
+        // 激活轴点旋转程序化覆盖（PlayerControllerScript.LateUpdate 据此接管轴点 worldRotation）
+        ctx.AimRigActive = true;
     }
 
     /// <summary>进入瞬间把左右手 ChainIK 的 tip（腕骨）位姿换算进枪根 local 空间保存。</summary>
@@ -317,26 +345,87 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
     {
         Vector3 origin = rigPivot != null
             ? rigPivot.position
-            : ctx.Transform.position + Vector3.up * 1.2f;
+            : ctx.Transform.position + Vector3.up * FallbackAxisHeight;
         return origin + ctx.Transform.forward * ctx.Values.aimRayDistance;
     }
 
     /// <summary>
-    /// 双手 ChainIK target 推算：用进入瞬间捕获的"腕-枪"常量位姿 × 当前枪根世界位姿，
+    /// 轴点旋转的确定性推进（状态 Tick 内执行，LateUpdate 只做应用）：
+    /// RotateTowards 以 aimAxisMaxRotSpeed 限速把 rigAxisRotation 插向"本帧枪口瞄准方向"，
+    /// 结果写入 ctx.AxisPointRotation——该值同时被 LateUpdate（设置轴点 worldRotation）与
+    /// UpdateHandTargets（推算双手 target）使用，保证手/枪同帧同旋转。
+    /// 轴向语义：与原 rifle Multi-Aim（aimAxis=Z_NEG）一致——aimAxisNegZ=true 时让轴点 -Z 指向瞄准点。
+    /// </summary>
+    void TickAxisRotation(PlayerContext ctx)
+    {
+        if (!rigHeld || rigPivot == null) return;
+
+        Vector3 dir = ctx.GunAimPoint - rigPivot.position;
+        if (dir.sqrMagnitude < MinAimDirSqr) return;
+
+        Quaternion target = ctx.Values.aimAxisNegZ
+            ? Quaternion.LookRotation(-dir, Vector3.up)
+            : Quaternion.LookRotation(dir, Vector3.up);
+        rigAxisRotation = Quaternion.RotateTowards(rigAxisRotation, target,
+            ctx.Values.aimAxisMaxRotSpeed * Time.deltaTime);
+        ctx.AxisPointRotation = rigAxisRotation;
+    }
+
+    /// <summary>
+    /// 双手 ChainIK target 推算：用进入瞬间捕获的"腕-枪"常量位姿 × 本帧枪根应处位姿
+    /// （轴点位置 + rigAxisRotation × 枪根 local，与 LateUpdate 写入轴点的旋转同值），
     /// 得到本帧手腕应在的世界位姿并写入 target。只写 target.transform，不改约束装配。
     /// </summary>
     void UpdateHandTargets(PlayerContext ctx)
     {
-        if (!rigHeld || rigRoot == null) return;
+        if (!rigHeld || rigRoot == null || rigPivot == null) return;
+
+        // 重捕获时机：crossfade 完成后一次性重捕获稳态握位（期间手保持贴枪，见字段注释），
+        // 随后在 aimHandRelockBlendTime 内从旧握位平滑过渡到稳态握位
+        if (!rigHandLocked)
+        {
+            rigRelockRemaining -= Time.deltaTime;
+            if (rigRelockRemaining <= 0f)
+            {
+                rightWristPrevPos = rightWristLocalPos;
+                rightWristPrevRot = rightWristLocalRot;
+                leftWristPrevPos = leftWristLocalPos;
+                leftWristPrevRot = leftWristLocalRot;
+                CaptureHandOffsets(ctx);
+                rigHandLocked = true;
+                rigRelockBlendDuration = Mathf.Max(0.001f, ctx.Values.aimHandRelockBlendTime);
+                rigRelockBlendRemaining = rigRelockBlendDuration;
+            }
+        }
+
+        // 平滑过渡（旧握位 → 稳态握位）；无过渡时直接用当前捕获值
+        Vector3 rPos = rightWristLocalPos;
+        Quaternion rRot = rightWristLocalRot;
+        Vector3 lPos = leftWristLocalPos;
+        Quaternion lRot = leftWristLocalRot;
+        if (rigRelockBlendRemaining > 0f)
+        {
+            rigRelockBlendRemaining = Mathf.Max(0f, rigRelockBlendRemaining - Time.deltaTime);
+            float t = 1f - rigRelockBlendRemaining / rigRelockBlendDuration;
+            float s = t * t * (3f - 2f * t);
+            rPos = Vector3.Lerp(rightWristPrevPos, rightWristLocalPos, s);
+            rRot = Quaternion.Slerp(rightWristPrevRot, rightWristLocalRot, s);
+            lPos = Vector3.Lerp(leftWristPrevPos, leftWristLocalPos, s);
+            lRot = Quaternion.Slerp(leftWristPrevRot, leftWristLocalRot, s);
+        }
+
+        // 枪根本帧应处位姿（确定性：旋转 = rigAxisRotation，与轴点即将写入的 worldRotation 一致）
+        Vector3 gunPos = rigPivot.position + rigAxisRotation * rigRoot.localPosition;
+        Quaternion gunRot = rigAxisRotation * rigRoot.localRotation;
         if (rightWristCaptured)
         {
             WriteChainTarget(ctx.RightArmChainConstraint,
-                rigRoot.TransformPoint(rightWristLocalPos), rigRoot.rotation * rightWristLocalRot);
+                gunPos + gunRot * rPos, gunRot * rRot);
         }
         if (leftWristCaptured)
         {
             WriteChainTarget(ctx.LeftArmChainConstraint,
-                rigRoot.TransformPoint(leftWristLocalPos), rigRoot.rotation * leftWristLocalRot);
+                gunPos + gunRot * lPos, gunRot * lRot);
         }
     }
 

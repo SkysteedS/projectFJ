@@ -167,9 +167,15 @@ public class PlayerControllerScript : MonoBehaviour
         leftArmChainConstraint.weight = animator.GetFloat(AnimLeftArmChainIKWeight);
         rightLegConstraint.weight = animator.GetFloat(AnimRightLegIKWeight);
         leftLegConstraint.weight = animator.GetFloat(AnimLeftLegIKWeight);
-        headAimConstraint.weight = animator.GetFloat(AnimHeadAimIKWeight);
-        bodyAimConstraint.weight = animator.GetFloat(AnimBodyAimIKWeight);
-        rifleAimConstraint.weight = animator.GetFloat(AnimRifleAimIKWeight);
+        if (headAimConstraint != null)
+            headAimConstraint.weight = animator.GetFloat(AnimHeadAimIKWeight);
+        if (bodyAimConstraint != null)
+            bodyAimConstraint.weight = animator.GetFloat(AnimBodyAimIKWeight);
+        // rifle Multi-Aim 已由"轴点旋转程序化覆盖"（LateUpdate 确定性写入）退役：
+        // 强制 0——即使场景中组件仍存在/将来误重挂回轴点，也不参与求值，
+        // 避免与确定性旋转（rigAxisRotation）冲突造成手/枪偶发错位穿模
+        if (rifleAimConstraint != null)
+            rifleAimConstraint.weight = 0f;
     }
     #endregion
 
@@ -199,6 +205,26 @@ public class PlayerControllerScript : MonoBehaviour
     }
 
     /// <summary>
+    /// 轴点旋转的应用（LateUpdate 执行：保证在 Animator 求值之后，见下方说明）：
+    /// 轴点仍是 Chest 的子级（位置跟随胸口，防穿模），但其【旋转】不再交给被胸部动画
+    /// 逐帧扰动的 Multi-Aim 增量补偿（±限制的补偿额被动画消耗→移动/甩枪跟不上），
+    /// 而是由瞄准状态在 Tick 中用 RotateTowards 以 aimAxisMaxRotSpeed 限速推进
+    /// （确定性值 ctx.AxisPointRotation，见 Rifle_Aiming_Ground_State.TickAxisRotation），
+    /// 此处只做应用：写入轴点 worldRotation。
+    /// 关键：双手 ChainIK target 与轴点写入使用【同一确定性旋转】——若在本处各自推进/
+    /// 推算，两者会用到不同时点的旋转，导致"枪先转、手后算"的同帧错位穿模（已修复）。
+    /// 轴向语义：与原 rifle Multi-Aim（aimAxis=Z_NEG）一致——aimAxisNegZ=true 时让轴点 -Z 指向瞄准点。
+    /// </summary>
+    void LateUpdate()
+    {
+        if (context == null || !context.AimRigActive) return;
+        Transform pivot = context.AimAxisPoint;
+        if (pivot == null) return;
+
+        pivot.rotation = context.AxisPointRotation;
+    }
+
+    /// <summary>
     /// 姿态三枚举 → 动画参数（body posture / hand posture / player handing）。
     /// 状态类只负责运动数据（速度分量），姿态切换后的动画分支由本处统一驱动；
     /// 覆盖"瞄准中跳跃 → 取消瞄准"等组合变化（切到 Normal 手部即回正常动画分支）。
@@ -209,6 +235,46 @@ public class PlayerControllerScript : MonoBehaviour
         animator.SetInteger(AnimBodyPosture, (int)machine.Body);
         animator.SetInteger(AnimHandPosture, (int)machine.Hand);
         animator.SetInteger(AnimPlayerHanding, (int)machine.Handing);
+    }
+    #endregion
+
+    #region 武器动画事件（Animation Event 分发：Function 填 OnWeaponEvent，String 填分发键）
+    // 入口写在主体类（Animator 所在对象）：Rifle 引用已在手，Rifle.GetComponent<WeaponSwitch>()
+    // 直接取到武器切换脚本，无需再挂独立组件/拖引用。
+    /// <summary>武器动画事件入口（仅 String 参数）。</summary>
+    public void OnWeaponEvent(string message) => DispatchWeaponEvent(message);
+
+    /// <summary>武器动画事件入口（Float + String 参数）。</summary>
+    public void OnWeaponEvent(float value, string message) => DispatchWeaponEvent(message);
+
+    /// <summary>武器动画事件入口（Float + Int + String 参数，与事件面板当前配置匹配）。</summary>
+    public void OnWeaponEvent(float value, int index, string message) => DispatchWeaponEvent(message);
+
+    /// <summary>武器动画事件入口（Float + Int + String + Object 参数）。</summary>
+    public void OnWeaponEvent(float value, int index, string message, Object sender) => DispatchWeaponEvent(message);
+
+    /// <summary>按分发键调用 rifle 上 WeaponSwitch 的切换操作。</summary>
+    void DispatchWeaponEvent(string message)
+    {
+        // GetComponentInChildren：WeaponSwitch 挂在 Rifle 本体或 rifle 内部子对象（如 handle）均可命中
+        WeaponSwitch weaponSwitch = Rifle != null ? Rifle.GetComponentInChildren<WeaponSwitch>(true) : null;
+        if (weaponSwitch == null)
+        {
+            Debug.LogWarning($"[WeaponEvent] 武器事件 '{message}' 未找到 WeaponSwitch（Rifle 未指派或 Rifle（含子物体）上无该组件）", this);
+            return;
+        }
+        switch (message)
+        {
+            case "GrabRifle":
+                weaponSwitch.SwitchToInUse();      // 拔枪：切到使用中挂点，isUsing = true
+                break;
+            case "PutRifle":
+                weaponSwitch.SwitchToStored();     // 收枪：切到未使用/收纳挂点，isUsing = false
+                break;
+            default:
+                Debug.LogWarning($"[WeaponEvent] 未处理的分发键：{message}", this);
+                break;
+        }
     }
     #endregion
 

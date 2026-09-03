@@ -24,6 +24,7 @@ public class Rifle_Normal_Ground_State : PlayerStateBase
     float landingFallBlend;     // 落地时捕获的垂直速度（原始 m/s，负值向下；落地过渡期保持）
     float landingBlendTimer;    // 落地过渡保持计时（与动画 body posture 过渡时长对齐）
     bool landingBlendActive;    // 落地过渡是否进行中
+    bool leftHandIkWarned;      // 左手 IK 写入无效时只警告一次（防刷屏）
     float weaponSwitchBlendTimer;       // 武器切换速度插值兜底计时（动画未检测到时用）
     float weaponSwitchStartSpeed;       // 武器切换插值起点（旧武器档位速度，Enter 捕获）
     bool weaponSwitchBlendActive;       // 武器切换速度插值进行中
@@ -61,6 +62,10 @@ public class Rifle_Normal_Ground_State : PlayerStateBase
     public override void Tick(PlayerContext ctx)
     {
         float dt = Time.deltaTime;
+
+        // 左手手部 IK 目标实时计算（步枪正常状态每帧）：目标 = 枪根当前位姿 × 护木锚点基准，
+        // 左手贴护木、随武器/动画运行（不再依赖 rifle idle hand ik.anim 的路径驱动）
+        UpdateLeftHandIkTarget(ctx);
 
         RotateTowardMoveDirection(ctx);
 
@@ -123,6 +128,40 @@ public class Rifle_Normal_Ground_State : PlayerStateBase
         }
 
         WriteAnimatorParams(ctx, speed);
+    }
+
+    /// <summary>
+    /// 左手手部 IK 目标实时计算（步枪正常状态，每帧）。
+    /// 遵循项目 IK 约定【只更新 transform、不修改 target】：
+    /// 经左手 TwoBoneIK 约束（LeftHandConstraint）取其装配固定的 data.target（只读引用），
+    /// 每帧只写该 target 的 transform（世界位姿 = 枪根当前位姿 × 锚点值，
+    /// gunLeftHandAnchorLocalPosition/Euler——Inspector 可调，调好后即固定）。
+    /// 若 target 仍装配在武器层级内（武器子物体自动跟随），则不写入（写了会被武器覆盖）。
+    /// </summary>
+    void UpdateLeftHandIkTarget(PlayerContext ctx)
+    {
+        Transform rifleRoot = ctx.RifleRoot;
+        Transform target = ctx.LeftHandConstraint != null ? ctx.LeftHandConstraint.data.target : null;
+
+        if (rifleRoot == null || target == null)
+        {
+            if (!leftHandIkWarned)
+            {
+                leftHandIkWarned = true;
+                Debug.LogWarning(
+                    $"[LeftHandIK] 同步无效：rifleRoot={(rifleRoot != null ? rifleRoot.name : "null（PlayerControllerScript.Rifle 未指派）")}，" +
+                    $"leftHandTarget={(target != null ? target.name : "null（左手 TwoBoneIK 约束 data.target 未装配）")}",
+                    ctx.Transform);
+            }
+            return;
+        }
+
+        // 只写 target 的 transform；参考引用（约束装配）不变
+        if (target.IsChildOf(rifleRoot)) return;   // 武器子物体：自动跟随，无需写入
+
+        target.SetPositionAndRotation(
+            rifleRoot.TransformPoint(ctx.Values.gunLeftHandAnchorLocalPosition),
+            rifleRoot.rotation * Quaternion.Euler(ctx.Values.gunLeftHandAnchorLocalEuler));
     }
 
     public override void OnAnimatorMove(PlayerContext ctx)
