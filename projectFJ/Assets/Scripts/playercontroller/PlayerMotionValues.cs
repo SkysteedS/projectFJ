@@ -112,6 +112,27 @@ public class PlayerMotionValues
     [Tooltip("左手 IK 锚点作为【武器子物体】的 local 位置——标定值（来源：原装配复合值 AK74 相对 handle (0,0.065,-0.0906) + 护木锚点相对 AK74 (0.089,-0.016,-0.158)，AK74 无旋转直接相加；已在场景标定生效，勿随意改；调整时按“场景摆枪→读该对象相对枪根 local”重标")] public Vector3 gunLeftHandAnchorLocalPosition = new Vector3(0.089f, 0.049f, -0.2486f);
     [Tooltip("左手 IK 锚点作为【武器子物体】的 local 旋转（Euler）——标定值（来源：护木锚点相对 AK74 的旋转 (63.164,-10.148,112.995)；场景标定生效，勿随意改")] public Vector3 gunLeftHandAnchorLocalEuler = new Vector3(63.164f, -10.148f, 112.995f);
 
+    [Header("右手 IK 锚点（专用变量：枪把手锚点 = Chest 骨骼子物体 local；值已标定）")]
+    [Tooltip("右手 IK 锚点作为【Chest 骨骼子物体】的 local 位置——标定值（2026-09 重新标定：右手 TwoBoneIK target 相对 Chest 的局部坐标；target 在装配中是 Chest 子级（与原动画曲线同空间），标定生效，勿随意改")] public Vector3 chestRightHandAnchorLocalPosition = new Vector3(0.18f, -0.117f, 0.072f);
+    [Tooltip("右手 IK 锚点作为【Chest 骨骼子物体】的 local 旋转（Euler）——标定值（2026-09 重新标定，与上方位置同批；标定生效，勿随意改")] public Vector3 chestRightHandAnchorLocalEuler = new Vector3(-230.47f, 185.38f, 261.551f);
+    [Tooltip("右手 IK 逐帧调试日志：常态帧打印「Write（标定写入）」与「FrameEnd（帧末实际值）」，帧末 ≠ 写入即 Animator 写回覆盖；拔/收枪切换帧打印「Switch」说明由脚本按动画进度接管（帧末 ≠ Write 属预期）（调试完关闭）")]
+    public bool rightHandIkFrameDebugLog = true;
+
+    [Header("右手拔/收枪切换 IK 轨迹（grab/put ik clip 的 target 曲线改由脚本接管）")]
+    [Tooltip("拔/收枪动画中段（握枪/松手瞬间）target 的局部位姿——原 grab/put ik clip 的中间关键帧值 (0.1499, 0.3577, -0.1358)，勿随意改；重新标定参照 clip 原曲线")]
+    public Vector3 rifleSwitchIkMidLocalPosition = new Vector3(0.1499f, 0.3577f, -0.1358f);
+    [Tooltip("拔/收枪动画中段 target 的局部旋转（Euler）——原 grab/put ik clip 的中间关键帧值 (-50, 185.38, 261.551)，勿随意改")]
+    public Vector3 rifleSwitchIkMidLocalEuler = new Vector3(-50f, 185.38f, 261.551f);
+
+    [Tooltip("grab rifle ik（1.1833s）位置轨迹归一化时间窗：开始离位 / 到达中段 / 回到标定位（由 clip 位置关键帧 0.15s / 0.4667s / 0.85s ÷ 时长换算）")]
+    public SwitchIkWindow grabSwitchPositionWindow = new SwitchIkWindow(0.1268f, 0.3944f, 0.7183f);
+    [Tooltip("grab rifle ik 旋转轨迹归一化时间窗：由 clip 欧拉关键帧 0s / 0.4667s / 1.1833s ÷ 时长换算（旋转自 0 即开始离位、到结尾才回位）")]
+    public SwitchIkWindow grabSwitchRotationWindow = new SwitchIkWindow(0f, 0.3944f, 1f);
+    [Tooltip("put rifle ik（1.8167s）位置轨迹归一化时间窗：由 clip 位置关键帧 0.35s / 0.8333s / 1.3334s ÷ 时长换算")]
+    public SwitchIkWindow putSwitchPositionWindow = new SwitchIkWindow(0.1927f, 0.4587f, 0.734f);
+    [Tooltip("put rifle ik 旋转轨迹归一化时间窗：由 clip 欧拉关键帧 0s / 0.8333s / 1.8s ÷ 时长换算（旋转自 0 即开始离位、接近结尾才回位）")]
+    public SwitchIkWindow putSwitchRotationWindow = new SwitchIkWindow(0f, 0.4587f, 0.9908f);
+
     [Header("攀爬")]
     [Tooltip("攀爬移动速度（m/s）：输入映射到墙面切平面后的移动速度")]
     public float climbSpeed = 2f;
@@ -130,6 +151,37 @@ public class PlayerMotionValues
 
     [Tooltip("贴墙收敛速度（每秒收敛比例）")]
     public float climbWallHugSpeed = 8f;
+
+    [Header("攀爬手部 IK（程序化：跟随头部的水平线 + 中线对称姿态；只移动 TwoBoneIK target，权重由动画状态机管理）")]
+    [Tooltip("水平线高度（m）：手部姿态的基准水平线相对头部骨骼的高度（沿墙面向上为正；该线每帧跟随头部）")]
+    public float climbHandLineHeight = 0.1f;
+
+    [Tooltip("中线距离（m）：左右手相对中线（身体在墙面上投影的中心竖线）的横向距离；上下攀爬时双手持该距离不动")]
+    public float climbHandCenterDist = 0.25f;
+
+    [Tooltip("交替长度（m）：上下攀爬时双手交替幅度——手在水平线上方/下方各距水平线的距离（两手一致、上下对称）")]
+    public float climbHandAlternateLength = 0.18f;
+
+    [Tooltip("放置距离（m）：左右攀爬时上下放置距离——对应移动方向侧的手在水平线下方、相反侧手在上方，双方距水平线的距离（一致）")]
+    public float climbHandPlaceDist = 0.15f;
+
+    [Tooltip("开合幅度（m）：左右攀爬时双手横向收拢/打开的摆动幅度：收拢 = 中线距离 − 开合幅度，打开 = 中线距离 + 开合幅度（双手幅度一致）")]
+    public float climbHandOpenAmount = 0.12f;
+
+    [Tooltip("姿态切换时间（s）：手部姿态（上下换手 / 收开互换）切换的平滑过渡时长")]
+    public float climbHandSwitchTime = 0.4f;
+
+    [Tooltip("步进交替间隔（s）：持续同方向攀爬时手臂姿态交替（上下换手 / 收开互换）的间隔")]
+    public float climbHandStepInterval = 0.6f;
+
+    [Tooltip("最大臂展（m）：手部目标相对基准点（头部骨骼 + 水平线偏移）在墙面平面内的最大偏移；超限被钳制以保证双臂可达")]
+    public float climbHandMaxReach = 0.35f;
+
+    [Tooltip("攀爬 IK 调试可视化（Scene 视图）：青色 = IK 目标，黄色 = 实际手骨（腕），红色 = 目标到手骨的连线（线越长 = IK 越没拉到位）")]
+    public bool climbIkDebugGizmos = true;
+
+    [Tooltip("退出攀爬时把手/头 IK 权重参数归零（脚本侧兜底）：动画层 climbing 退出后无状态驱动这些参数（层回 DoNothing 无曲线），参数会滞留 1 导致退攀后双手被钉在旧目标上；开启后由状态 Exit 写 0。若后续动画层补上权重曲线可关闭")]
+    public bool climbResetIkWeightsOnExit = true;
 
     /// <summary>起跳初速度：由跳跃高度与重力反推 v = √(2·|g|·h)。</summary>
     public float JumpSpeed => Mathf.Sqrt(2f * Mathf.Abs(gravity) * jumpHeight);
@@ -159,4 +211,23 @@ public class PlayerMotionValues
     /// <summary>重力累积（一帧）。</summary>
     public float ApplyGravity(float verticalVelocity, float deltaTime)
         => verticalVelocity + gravity * deltaTime;
+}
+
+/// <summary>拔/收枪切换 IK 的一段“离位-中段-回位”归一化时间窗（0..1，对应原 clip 关键帧换算时间）。</summary>
+[System.Serializable]
+public class SwitchIkWindow
+{
+    /// <summary>轨迹开始离开标定位的归一化时间。</summary>
+    public float rampInStart;
+    /// <summary>到达中段位（rifleSwitchIkMidLocal*）的归一化时间。</summary>
+    public float dipMid;
+    /// <summary>回到标定位的归一化时间。</summary>
+    public float rampOutEnd;
+
+    public SwitchIkWindow(float rampInStart, float dipMid, float rampOutEnd)
+    {
+        this.rampInStart = rampInStart;
+        this.dipMid = dipMid;
+        this.rampOutEnd = rampOutEnd;
+    }
 }

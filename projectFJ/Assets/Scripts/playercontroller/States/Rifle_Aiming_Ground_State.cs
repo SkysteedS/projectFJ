@@ -375,6 +375,9 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
     /// 双手 ChainIK target 推算：用进入瞬间捕获的"腕-枪"常量位姿 × 本帧枪根应处位姿
     /// （轴点位置 + rigAxisRotation × 枪根 local，与 LateUpdate 写入轴点的旋转同值），
     /// 得到本帧手腕应在的世界位姿并写入 target。只写 target.transform，不改约束装配。
+    /// 注意：正常↔瞄准的动画 crossfade 期间右手 TwoBoneIK 与 ChainIK 权重同时 > 0，
+    /// 右手 TwoBoneIK target 的对齐由 PlayerControllerScript.UpdateRightHandAimBlendTargets
+    /// 在本状态之后统一处理（把两 target 写到同一插值位姿，消除争抢扭转），本方法不重复写。
     /// </summary>
     void UpdateHandTargets(PlayerContext ctx)
     {

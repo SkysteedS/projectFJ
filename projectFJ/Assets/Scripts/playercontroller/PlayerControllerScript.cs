@@ -108,13 +108,18 @@ public class PlayerControllerScript : MonoBehaviour
     }
 
     /// <summary>
-    /// 瞄准调试可视化（Scene 视图常驻，运行时生效）：
-    /// - 瞄准落点：相机中心射线（命中=青色线+绿色落点球；未命中=黄色线+黄色远点球）；
-    /// - 枪约束驱动对象：白色球（对象位置）+ 品红射线（其 aimAxis 当前世界方向，正确时应指向落点）。
-    /// 对照观察：品红线是否指向落点球——不指向 = 轴向/limits/驱动对象(handle 是否为整枪根)问题；
-    /// 落点球是否在准星上——不在 = 射线层掩码/起点问题。
+    /// 调试可视化（Scene 视图常驻，运行时生效）：
+    /// - 瞄准：落点（命中=青线绿球 / 远点=黄线黄球）+ 枪约束驱动对象（白球 + 品红瞄准轴射线）；
+    /// - 攀爬 IK（values.climbIkDebugGizmos 且正攀爬时）：青色 = 双手 IK 目标，
+    ///   黄色 = 手骨（腕）实际位置，红色 = 目标到手骨连线（线越长 = IK 越没拉到位）。
     /// </summary>
     void OnDrawGizmos()
+    {
+        DrawAimGizmos();
+        DrawClimbIkGizmos();
+    }
+
+    void DrawAimGizmos()
     {
         if (context == null || !context.LastAimValid) return;
 
@@ -137,6 +142,27 @@ public class PlayerControllerScript : MonoBehaviour
                 Gizmos.DrawRay(gun.position, gun.rotation * axis * 20f);
             }
         }
+    }
+
+    /// <summary>攀爬手部 IK 调试绘制（攀爬状态经 PlayerContext 每帧写入；非攀爬时 ClimbIkDebugActive = false 不绘制）。</summary>
+    void DrawClimbIkGizmos()
+    {
+        if (context == null || !context.ClimbIkDebugActive) return;
+
+        // IK 目标位置（青色线框）
+        Gizmos.color = Color.cyan;
+        Gizmos.DrawWireSphere(context.ClimbLeftTarget, 0.09f);
+        Gizmos.DrawWireSphere(context.ClimbRightTarget, 0.09f);
+
+        // 手骨实际位置（黄色线框）
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawWireSphere(context.ClimbLeftHandPos, 0.06f);
+        Gizmos.DrawWireSphere(context.ClimbRightHandPos, 0.06f);
+
+        // 目标与手骨连线：线越长说明 IK 越没拉到位
+        Gizmos.color = Color.red;
+        Gizmos.DrawLine(context.ClimbLeftTarget, context.ClimbLeftHandPos);
+        Gizmos.DrawLine(context.ClimbRightTarget, context.ClimbRightHandPos);
     }
 
     static Vector3 AimAxisToVector(MultiAimConstraintData.Axis axis)
@@ -177,6 +203,115 @@ public class PlayerControllerScript : MonoBehaviour
         if (rifleAimConstraint != null)
             rifleAimConstraint.weight = 0f;
     }
+
+    /// <summary>
+    /// 拔枪（Grab Rifle）/ 收枪（Put Rifle）期间接管右手 TwoBoneIK target 轨迹——
+    /// 替代原 grab/put ik clip 里的 target TRS 曲线（clip 只保留权重曲线）。
+    /// 背景：clip 一旦绑定 target，Animator 的 Write Defaults 会在切换帧（如 Grab Rifle→Rifle Idle）
+    /// 把 target 写回初始化时缓存的场景值 → 与状态类标定写入竞态一帧；去掉绑定后 Animator 不再写它，
+    /// 轨迹改由本方法按 "Switching Weapon" 动画进度逐帧写入（脚本侧唯一权威，时序同状态类 Update 写入）。
+    /// 轨迹 = 标定位（chestRightHandAnchorLocalPosition/Euler）→ 中段位（rifleSwitchIkMidLocalPosition/Euler）
+    /// → 回到标定位；grab/put 的离位/中段/回归时间窗取自原 clip 关键帧，见 PlayerMotionValues。
+    /// 非切换动画帧直接返回：常态由 Rifle_Normal_Ground_State.WriteRightHandCalibratedPose 维持标定值。
+    /// </summary>
+    void UpdateRightHandSwitchIkTarget()
+    {
+        if (context == null || rightHandConstraint == null) return;
+        Transform target = rightHandConstraint.data.target;
+        if (target == null) return;
+
+        // 切换动画（Grab/Put Rifle，tag "Switching Weapon"）未播放 → 不接管（状态类写标定值）
+        if (!context.TryGetWeaponSwitchAnimProgress(out float nt)) return;
+
+        // 判别收枪还是拔枪：机器在 SlotRifle 按下当帧即切到空手/步枪，动画层随后/同时播 Put/Grab Rifle
+        bool isPut = context.Handing == PlayerHanding.Unarmed;
+        bool isGrab = context.Handing == PlayerHanding.Rifle;
+        if (!isPut && !isGrab) return;   // 其他武器切换（暂无）需另行扩展
+
+        PlayerMotionValues v = context.Values;
+        float t = Mathf.Clamp01(nt);
+
+        // 位置与旋转在原 clip 中的关键帧时间窗不同，分别采样（原 clip 关键帧间为 0 切线，
+        // 离位段与回归段各用 SmoothStep 逼近）
+        SwitchIkWindow posWin = isGrab ? v.grabSwitchPositionWindow : v.putSwitchPositionWindow;
+        SwitchIkWindow rotWin = isGrab ? v.grabSwitchRotationWindow : v.putSwitchRotationWindow;
+        float posF = SampleSwitchIkDip(t, posWin);
+        float rotF = SampleSwitchIkDip(t, rotWin);
+
+        target.localPosition = Vector3.Lerp(v.chestRightHandAnchorLocalPosition,
+                                            v.rifleSwitchIkMidLocalPosition, posF);
+        target.localRotation = Quaternion.Euler(
+            Vector3.Lerp(v.chestRightHandAnchorLocalEuler, v.rifleSwitchIkMidLocalEuler, rotF));
+
+        if (v.rightHandIkFrameDebugLog)
+        {
+            Debug.Log($"[RightHandIK] Switch f{Time.frameCount} {target.name} " +
+                      $"nt={t:F3} posBlend={posF:F2} rotBlend={rotF:F2} localPos={target.localPosition:F3} " +
+                      $"localRot={target.localRotation.eulerAngles:F1} (grab={isGrab})");
+        }
+    }
+
+    /// <summary>切换 IK 中段轨迹采样：标定位 → 中段位 → 标定位（0..1，窗内 SmoothStep 缓动）。</summary>
+    static float SampleSwitchIkDip(float t, SwitchIkWindow window)
+    {
+        if (t <= window.rampInStart || t >= window.rampOutEnd) return 0f;
+        if (t < window.dipMid)
+            return SmoothStep01((t - window.rampInStart) / (window.dipMid - window.rampInStart));
+        return 1f - SmoothStep01((t - window.dipMid) / (window.rampOutEnd - window.dipMid));
+    }
+
+    /// <summary>归一化缓动（smoothstep，0→1 两端零导数，与原 0 切线关键帧语义一致）。</summary>
+    static float SmoothStep01(float t) => t * t * (3f - 2f * t);
+
+    /// <summary>
+    /// 瞄准进出交叉淡化帧处理右手两套 IK 的 target 对齐：
+    /// 持枪站立时右臂由 TwoBoneIK（target = 标定位，Chest 子物体）接管；
+    /// 瞄准时右臂由 ChainIK（target = 瞄准腕位，Rifle_Aiming_Ground_State 每帧写入）接管。
+    /// 动画层在正常/瞄准状态间 crossfade 时两者权重同时 > 0，若两 target 各执一词，
+    /// 同一右臂链会被解向两个不同位姿 → 扭转/争抢（此前 target 由动画绑定跟随混合，
+    /// 脚本接管后该自然混合消失，差异便暴露）。
+    /// 本方法在权重重叠帧把两个 target 写到【同一世界位姿】：
+    /// P = Lerp/Slerp(持枪标定位, 瞄准 Chain 位, chainW/(twoW+chainW))——随动画交叉淡化
+    /// 从持枪位自然过渡到瞄准位（或反向），两个约束始终一致，不再争夺。
+    /// 权重单一侧（TwoBoneIK 或 ChainIK 接近 0）由对应状态自行维持，本方法不介入。
+    /// </summary>
+    void UpdateRightHandAimBlendTargets()
+    {
+        if (context == null) return;
+        if (rightHandConstraint == null || rightArmChainConstraint == null) return;
+
+        Transform twoBoneTarget = rightHandConstraint.data.target;
+        Transform chainTarget = rightArmChainConstraint.data.target;
+        if (twoBoneTarget == null || chainTarget == null) return;
+
+        float twoWeight = rightHandConstraint.weight;
+        float chainWeight = rightArmChainConstraint.weight;
+        const float overlapEpsilon = 0.005f;
+        if (twoWeight <= overlapEpsilon || chainWeight <= overlapEpsilon) return;
+
+        PlayerMotionValues v = context.Values;
+
+        // 持枪标定位：标定值（Chest 局部）还原到世界
+        Transform anchor = twoBoneTarget.parent;
+        Vector3 holdPos = anchor != null
+            ? anchor.TransformPoint(v.chestRightHandAnchorLocalPosition)
+            : twoBoneTarget.position;
+        Quaternion holdRot = anchor != null
+            ? anchor.rotation * Quaternion.Euler(v.chestRightHandAnchorLocalEuler)
+            : twoBoneTarget.rotation;
+
+        // 瞄准位：ChainIK target 当前值（进瞄准 = 本帧瞄准状态已写入；退瞄准 = 上一帧瞄准值快照）
+        Vector3 aimPos = chainTarget.position;
+        Quaternion aimRot = chainTarget.rotation;
+
+        // 混合因子随权重比例推进：0 = 持枪位 … 1 = 瞄准位
+        float t = chainWeight / (twoWeight + chainWeight);
+        Vector3 pos = Vector3.Lerp(holdPos, aimPos, t);
+        Quaternion rot = Quaternion.Slerp(holdRot, aimRot, t);
+
+        twoBoneTarget.SetPositionAndRotation(pos, rot);
+        chainTarget.SetPositionAndRotation(pos, rot);
+    }
     #endregion
 
     #region 生命周期
@@ -202,6 +337,8 @@ public class PlayerControllerScript : MonoBehaviour
         SetIKweight();
         machine?.Tick(context); // 状态机：信号裁决 → 持久边裁决 → 当前状态 Tick（注册为空时经 ?. 跳过）
         SyncAnimatorPostureParams(); // 姿态组合（body/hand/handing）每帧同步：状态切换后动画分支随之切换
+        UpdateRightHandSwitchIkTarget(); // 拔/收枪切换帧：脚本按动画进度接管右手 target 轨迹（替代原 clip 内 target 曲线）
+        UpdateRightHandAimBlendTargets(); // 瞄准进出交叉淡化帧：对齐右手 TwoBoneIK 与 ChainIK 的 target（消除争夺扭转）
     }
 
     /// <summary>
@@ -217,11 +354,28 @@ public class PlayerControllerScript : MonoBehaviour
     /// </summary>
     void LateUpdate()
     {
+        LogRightHandIkFrameEnd();   // 帧末调试日志：Animator 求值后、渲染前的实际值
+
         if (context == null || !context.AimRigActive) return;
         Transform pivot = context.AimAxisPoint;
         if (pivot == null) return;
 
         pivot.rotation = context.AxisPointRotation;
+    }
+
+    /// <summary>
+    /// 帧末调试日志（Values.rightHandIkFrameDebugLog）：输出右手 IK target 在
+    /// Animator 求值之后、渲染之前的实际局部值——与状态类「Write」日志对比：
+    /// 帧末值 ≠ 写入值 = 有 Animator 写回（动画曲线绑定）在脚本之后覆盖了它。
+    /// </summary>
+    void LogRightHandIkFrameEnd()
+    {
+        if (context == null || !context.Values.rightHandIkFrameDebugLog) return;
+        if (rightHandConstraint == null || rightHandConstraint.data.target == null) return;
+
+        Transform t = rightHandConstraint.data.target;
+        Debug.Log($"[RightHandIK] FrameEnd f{Time.frameCount} {t.name} " +
+                  $"localPos={t.localPosition:F3} localRot={t.localRotation.eulerAngles:F1}");
     }
 
     /// <summary>
