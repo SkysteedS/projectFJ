@@ -29,7 +29,7 @@ public class PlayerInputState
         Reload      = 1 << 2,  // 换弹（R）
         Interact    = 1 << 3,  // 交互（F，action 名拼写为 Interacct）
         SlotRifle   = 1 << 4,  // 切换到步枪槽位（1）
-        SlotSword   = 1 << 5,  // 切换到剑槽位（2）
+        SlotPistol  = 1 << 5,  // 切换到手枪槽位（2）
         SlotGrenade = 1 << 6,  // 切换到手雷槽位（3）
         QuitClimb   = 1 << 7,  // 退出攀爬（X）：攀爬中按下退回默认姿态
         AimPressed  = 1 << 8,  // 瞄准按下边沿：供"切换瞄准"模式使用（按住模式由 frameAim 持久值驱动）
@@ -51,7 +51,7 @@ public class PlayerInputState
     [SerializeField] bool frameRun;
     [SerializeField] bool frameAim;
     [SerializeField] bool frameFireHeld;
-    [Tooltip("位掩码：1=Jump 2=FirePressed 4=Reload 8=Interact 16=SlotRifle 32=SlotSword 64=SlotGrenade 128=QuitClimb 256=AimPressed")]
+    [Tooltip("位掩码：1=Jump 2=FirePressed 4=Reload 8=Interact 16=SlotRifle 32=SlotPistol 64=SlotGrenade 128=QuitClimb 256=AimPressed")]
     [SerializeField] uint frameSignals;
     #endregion
 
@@ -141,8 +141,8 @@ public static class InputActionBridge
     public static void OnRifle(PlayerInputState input, UnityEngine.InputSystem.InputAction.CallbackContext ctx)
         => PressOnStarted(ctx, input, PlayerInputState.Signal.SlotRifle);
 
-    public static void OnSword(PlayerInputState input, UnityEngine.InputSystem.InputAction.CallbackContext ctx)
-        => PressOnStarted(ctx, input, PlayerInputState.Signal.SlotSword);
+    public static void OnPistol(PlayerInputState input, UnityEngine.InputSystem.InputAction.CallbackContext ctx)
+        => PressOnStarted(ctx, input, PlayerInputState.Signal.SlotPistol);
 
     public static void OnGrenade(PlayerInputState input, UnityEngine.InputSystem.InputAction.CallbackContext ctx)
         => PressOnStarted(ctx, input, PlayerInputState.Signal.SlotGrenade);

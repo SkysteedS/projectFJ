@@ -96,7 +96,7 @@
 3. **Unity 生命周期/调用约定**：`OnAnimatorMove`、`OnDrawGizmos`、`OnDrawGizmosSelected`、
    `OnEnable/OnDisable/OnDestroy`、MonoBehaviour 固有回调——框架反射调用，不得按"无引用"删除。
 4. **序列化依赖**：字段名被场景/预制 override（`propertyPath`）引用；删除字段会静默丢数据。
-5. **预留扩展点**：确属"规划中/待接入"（如剑、手雷状态类）在工厂中有映射或文档有记录时，
+5. **预留扩展点**：确属"规划中/待接入"（如手枪、手雷状态类）在工厂中有映射或文档有记录时，
    删除需用户确认；确认保留的须在注释中标注"规划中：…运行期不可达"。
 
 ## 8. 工程流程

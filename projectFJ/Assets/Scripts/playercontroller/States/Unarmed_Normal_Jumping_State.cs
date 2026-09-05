@@ -71,7 +71,7 @@ public class Unarmed_Normal_Jumping_State : PlayerStateBase
 
     void WriteAnimatorParams(PlayerContext ctx, float horizontalSpeed, float verticalVelocity)
     {
-        var anim = ctx.Animator;
+        var anim = ctx.AnimParams;   // 值缓存写入器：同值跳过 SetFloat
         // 水平面内速度分量：非瞄准时角色朝向移动方向——全速进前后轴（vertical speed），左右轴固定为 0
         anim.SetFloat(PlayerControllerScript.AnimVerticalSpeed, horizontalSpeed);
         anim.SetFloat(PlayerControllerScript.AnimHorizontalSpeed, ctx.Values.nonAimLateralSpeed);

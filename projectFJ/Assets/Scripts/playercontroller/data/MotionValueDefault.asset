@@ -12,42 +12,48 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: adcb899b5e0d779458b7516f218e229c, type: 3}
   m_Name: MotionValueDefault
   m_EditorClassIdentifier: 
-  rifleWalkSpeed: 1.5
-  rifleRunSpeed: 3.5
   unarmedWalkSpeed: 2
   unarmedRunSpeed: 4
+  rifleWalkSpeed: 1.5
+  rifleRunSpeed: 3.5
+  pistolWalkSpeed: 2
+  pistolRunSpeed: 4
   moveAcceleration: 9
-  aimAcceleration: 8
   rotateSpeed: 500
-  aimRotateSmoothTime: 0.12
-  aimRotateMaxSpeed: 360
   weaponSwitchSpeedBlendTime: 0.5
-  aimAlignTime: 0.35
-  aimAlignSmoothTime: 0.05
   gravity: -15
   jumpHeight: 1
   groundStickSpeed: -2
-  landingBlendTime: 0.25
   airborneFallThreshold: -2.5
   airborneRiseThreshold: 2
   landingVerticalThreshold: 0
+  landingBlendTime: 0.25
   minMoveSqrMagnitude: 0.0001
+  nonAimLateralSpeed: 0
+  aimToggleMode: 1
+  aimAcceleration: 8
+  aimAlignTime: 0.35
+  aimAlignSmoothTime: 0.05
+  aimRotateSmoothTime: 0.12
+  aimRotateMaxSpeed: 360
   aimRayDistance: 100
-  aimMissPointDistance: 100
   aimRayMask:
     serializedVersion: 2
     m_Bits: 63
+  aimMissPointDistance: 100
+  aimRigTransitionTime: 0.4
   aimAxisMaxRotSpeed: 720
   aimAxisNegZ: 1
-  aimHandCaptureTime: 0.5
+  aimHandCaptureTime: 0.51
   aimHandRelockBlendTime: 0.15
-  aimToggleMode: 1
-  aimRigTransitionTime: 0.35
-  nonAimLateralSpeed: 0
   gunLeftHandAnchorLocalPosition: {x: 0.089, y: 0.049, z: -0.2486}
   gunLeftHandAnchorLocalEuler: {x: 63.164, y: -10.148, z: 112.995}
   chestRightHandAnchorLocalPosition: {x: 0.18, y: -0.117, z: 0.072}
   chestRightHandAnchorLocalEuler: {x: -230.47, y: 185.38, z: 261.551}
+  pistolLeftHandAnchorLocalPosition: {x: 0.03, y: -0.1, z: 0.09}
+  pistolLeftHandAnchorLocalEuler: {x: 60, y: 105.3, z: -66}
+  pistolRightHandAnchorLocalPosition: {x: 0.005, y: -0.12, z: 0.23}
+  pistolRightHandAnchorLocalEuler: {x: -212.511, y: 266.677, z: 330.643}
   rightHandIkFrameDebugLog: 0
   rifleSwitchIkMidLocalPosition: {x: 0.1499, y: 0.3577, z: -0.1358}
   rifleSwitchIkMidLocalEuler: {x: -50, y: 185.38, z: 261.551}
@@ -70,14 +76,15 @@ MonoBehaviour:
   climbSpeed: 0.4
   climbApproachAngle: 60
   climbApproachMinSpeed: 0.5
-  climbExitMissFrames: 3
   climbWallHugDistance: 0.25
   climbWallHugSpeed: 8
-  climbDownExitFrames: 3
+  climbExitMissFrames: 3
   climbWallExitMissRatio: 0.5
+  climbDownExitFrames: 3
   climbSwitchTime: 0.4
   climbStepInterval: 0.6
   climbHeadLookAngle: 45
+  climbBodyLookAngle: 15
   climbFootLineHeight: -0.7
   climbFootCenterDist: 0.2
   climbFootAlternateLength: 0.15
@@ -86,7 +93,6 @@ MonoBehaviour:
   climbFootWallNormalOffset: 0.2
   climbLeftFootRotationOffset: {x: 90, y: 0, z: 0}
   climbRightFootRotationOffset: {x: 90, y: 0, z: 0}
-  climbBodyLookAngle: 15
   climbHandLineHeight: 0
   climbHandWallNormalOffset: 0.04
   climbHandCenterDist: 0.2
@@ -101,11 +107,6 @@ MonoBehaviour:
   topOutProbePalmOffset: 0.05
   topOutProbeRayLength: 0.3
   topOutProbeMissFrames: 3
-  topOutMatchStartNormalizedTime: 0.1
-  topOutMatchEndNormalizedTime: 0.3
-  topOutMatchPositionWeight: {x: 1, y: 1, z: 1}
-  topOutMatchPositionOffset: {x: 0, y: -0.1, z: -0.25}
-  topOutMatchRotationWeight: 0
   topOutGrabUseLedgeScan: 1
   topOutGrabScanStep: 0.01
   topOutGrabScanStartAbove: 0.5
@@ -113,5 +114,10 @@ MonoBehaviour:
   topOutGrabScanForward: 0.15
   topOutGrabPointUpOffset: 0.05
   topOutGrabMaxLedgeHeight: 0.5
+  topOutMatchStartNormalizedTime: 0.2
+  topOutMatchEndNormalizedTime: 0.3
+  topOutMatchPositionWeight: {x: 1, y: 1, z: 1}
+  topOutMatchPositionOffset: {x: 0, y: -0.1, z: -0.25}
+  topOutMatchRotationWeight: 0
   topOutExitNormalizedTime: 0.9
   topOutDebugLog: 0

@@ -22,12 +22,6 @@ public abstract class PlayerStateBase
 
     public virtual void Exit(PlayerContext ctx) { }
 
-    /// <summary>
-    /// 动画事件回调（由主体类的 Animation Event 入口经 PlayerStateMachine 转发到当前状态；默认忽略，状态按需覆写）。
-    /// 用途示例：登顶状态收到 HandGrabEdgeEnd（climb to end.anim 悬挂结束）即中断 MatchTarget 放手。
-    /// </summary>
-    public virtual void OnAnimEvent(PlayerContext ctx, string message) { }
-
     /// <summary>本状态每帧逻辑：读输入 → 运动/操作管理 → 必要时请求转换。</summary>
     public abstract void Tick(PlayerContext ctx);
 

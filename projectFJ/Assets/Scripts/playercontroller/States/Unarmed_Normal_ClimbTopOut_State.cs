@@ -12,8 +12,7 @@ using UnityEngine;
 ///   直接快照会让手抓空）；待 climb to end 真正开始播放后对该手下达一次 MatchTarget，
 ///   让动画“手按在缘上、身体悬挂→上撑”的位移与场景几何对齐；
 /// - 放手：一次性 MatchTarget 在 topOutMatchEnd（默认 0.1 = 动画 10%）处把被抓手精确匹配到
-///   墙顶抓取点（+ 可调偏移）；HandGrabEdgeEnd 事件（climb to end.anim 1.0s ≈ normalizedTime 0.261）
-///   触发后解除固定（后续不再匹配），由动画根运动接管把身体带上平台；
+///   墙顶抓取点（+ 可调偏移）；匹配到点后自然结束（无后续强制锁手），由动画根运动接管把身体带上平台；
 /// - 碰撞体：进入本状态即禁用 CharacterController——登顶的 MatchTarget/根运动位移需要【精确】落到
 ///   墙顶抓取点，若仍走 CC.Move，角色胶囊与墙顶/平台边缘的碰撞会顶掉/滑走部分位移，手就抓不到点；
 ///   禁用期间 OnAnimatorMove 直接把 deltaPosition 加到 transform，离开本状态时恢复 CC。
@@ -26,12 +25,6 @@ using UnityEngine;
 /// </summary>
 public class Unarmed_Normal_ClimbTopOut_State : PlayerStateBase
 {
-    /// <summary>
-    /// 放手动画事件名（与 climb to end.anim 的 Animation Event functionName 一致，勿改；
-    /// PlayerControllerScript.HandGrabEdgeEnd 收到事件后经状态机转发，本状态据此中断匹配）。
-    /// </summary>
-    public const string AnimEventHandGrabEdgeEnd = "HandGrabEdgeEnd";
-
     /// <summary>登顶动画 Tag（Animator 中 climb to end 状态的 m_Tag，见 Animator 控制器）。</summary>
     static readonly int ClimbToEndTagHash = Animator.StringToHash("ClimbToEnd");
     /// <summary>墙面方向向量平方长度下限（零向量防护）。</summary>
@@ -40,13 +33,14 @@ public class Unarmed_Normal_ClimbTopOut_State : PlayerStateBase
     const float GrabPointMaxBelowHand = -0.3f;
 
     bool grabLeftHand;          // 被固定的手：true = 左手（攀爬状态写入 ctx.TopOutGrabLeftHand，Enter 读取）
-    bool grabLockActive;        // 固定是否仍激活（等待 HandGrabEdgeEnd 放手前为 true）
-    bool grabMatchIssued;       // 是否已下达过一次性 MatchTarget（窗口终点 = 落位时间，事件后不再下达）
+    bool grabLockActive;        // 是否允许下达 MatchTarget（进入成功置 true，失败置 false；Exit 清）
+    bool grabMatchIssued;       // 是否已下达过一次性 MatchTarget（落位窗口只允许下达一次）
     Vector3 grabWorldPosition;  // MatchTarget 目标位：墙顶扫描抓取点（扫描失败时兜底 IK 快照）+ topOutMatchPositionOffset 可调偏移
     Quaternion grabWorldRotation; // 旋转快照（旋转权重 > 0 时使用；默认 0 时不影响）
     bool controllerWasEnabled;  // 进入前 CharacterController 的 enabled 值（Exit 恢复）
     bool controllerDisabled;    // 本状态是否禁用了 CharacterController
 
+    #region 状态生命周期与碰撞体接管（Enter/Exit/Tick/位移/CC 启停）
     public override void Enter(PlayerContext ctx)
     {
         grabLeftHand = ctx.TopOutGrabLeftHand;
@@ -56,7 +50,7 @@ public class Unarmed_Normal_ClimbTopOut_State : PlayerStateBase
 
     public override void Exit(PlayerContext ctx)
     {
-        // 防御：被中途切走（如动画事件未配置/状态被外力打断）时不残留匹配与固定标志
+        // 防御：被中途切走/状态被外力打断时不残留匹配与固定标志
         if (grabLockActive && ctx.Animator.isMatchingTarget)
         {
             ctx.Animator.InterruptMatchTarget(false);
@@ -77,25 +71,6 @@ public class Unarmed_Normal_ClimbTopOut_State : PlayerStateBase
         {
             ctx.RequestTransition(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground);
         }
-    }
-
-    /// <summary>
-    /// 动画事件回调（经 PlayerStateMachine.NotifyAnimEvent 由主体类入口转发）：
-    /// HandGrabEdgeEnd = 悬挂结束，解除固定（匹配窗口应在事件前已完成，此处只防御性中断
-    /// 尚未完成的匹配；之后动画由根运动自由驱动）。
-    /// </summary>
-    public override void OnAnimEvent(PlayerContext ctx, string message)
-    {
-        if (message != AnimEventHandGrabEdgeEnd || !grabLockActive) return;
-
-        if (ctx.Values.topOutDebugLog)
-        {
-            Debug.Log($"[ClimbTopOut] HandGrabEdgeEnd @nt={ClimbToEndNormalizedTime(ctx):F3} " +
-                      $"wasMatching={ctx.Animator.isMatchingTarget} target={grabWorldPosition:F3}");
-        }
-        if (ctx.Animator.isMatchingTarget) ctx.Animator.InterruptMatchTarget(false);
-        grabLockActive = false;
-        grabMatchIssued = false;
     }
 
     public override void OnAnimatorMove(PlayerContext ctx)
@@ -137,7 +112,9 @@ public class Unarmed_Normal_ClimbTopOut_State : PlayerStateBase
         ctx.CharacterController.enabled = controllerWasEnabled;
         controllerDisabled = false;
     }
+    #endregion
 
+    #region 悬挂手固定与墙顶扫描（进入时确定 MatchTarget 目标位）
     /// <summary>
     /// 悬挂手固定：进入时确定被抓手的世界抓取点（MatchTarget 目标），此后每帧不再改变。
     /// 抓取点优先来自“墙顶扫描”：从该手手骨上方沿角色前向偏移 topOutGrabScanForward 处
@@ -237,7 +214,9 @@ public class Unarmed_Normal_ClimbTopOut_State : PlayerStateBase
         }
         return false;
     }
+    #endregion
 
+    #region MatchTarget 下达与动画进度判定
     /// <summary>
     /// 一次性下达悬挂手 MatchTarget：在 climb to end 真正开播（crossfade 结束）、且动画进度进入
     /// [topOutMatchStart, topOutMatchEnd] 窗口时只调用一次。引擎从 start 起把修正权重混合到 1，
@@ -271,10 +250,6 @@ public class Unarmed_Normal_ClimbTopOut_State : PlayerStateBase
                       $"window={start:F3}..{end:F3} target={grabWorldPosition:F3} isMatching={ctx.Animator.isMatchingTarget}");
         }
     }
-
-    /// <summary>当前 ClimbToEnd 动画进度（调试日志用；未播放返回 -1）。</summary>
-    static float ClimbToEndNormalizedTime(PlayerContext ctx)
-        => TryGetClimbToEndProgress(ctx, out float normalizedTime) ? normalizedTime : -1f;
 
     /// <summary>
     /// Tag=ClimbToEnd 动画是否到达退出阈值：扫描所有动画层（跨层保险），
@@ -312,4 +287,5 @@ public class Unarmed_Normal_ClimbTopOut_State : PlayerStateBase
         normalizedTime = 0f;
         return false;
     }
+    #endregion
 }

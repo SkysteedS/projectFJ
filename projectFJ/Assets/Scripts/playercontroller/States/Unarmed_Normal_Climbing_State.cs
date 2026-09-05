@@ -478,7 +478,7 @@ public class Unarmed_Normal_Climbing_State : PlayerStateBase
 
     void WriteAnimatorParams(PlayerContext ctx)
     {
-        var anim = ctx.Animator;
+        var anim = ctx.AnimParams;   // 值缓存写入器：同值跳过 SetFloat（攀爬速度常量 0）
         // 攀爬动画分支不消费水平/垂直速度参数（body posture = 2 驱动），写 0
         anim.SetFloat(PlayerControllerScript.AnimVerticalSpeed, IdleSpeedParam);
         anim.SetFloat(PlayerControllerScript.AnimHorizontalSpeed, IdleSpeedParam);

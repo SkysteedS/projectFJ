@@ -32,6 +32,7 @@ public class Unarmed_Normal_Ground_State : PlayerStateBase
     bool weaponSwitchBlendActive;       // 武器切换速度插值进行中
     bool weaponSwitchAnimDriven;        // 已检测到切换动画（此后进度与动画 normalizedTime 同步，直到动画退出）
 
+    #region 状态生命周期与移动（Enter/Tick/旋转/速度/垂直交接）
     public override void Enter(PlayerContext ctx)
     {
         // 跨状态交接读取（设计文档 §5 约定：写入 = 状态类 Tick 末尾，读取 = 新状态 Enter）：
@@ -129,7 +130,9 @@ public class Unarmed_Normal_Ground_State : PlayerStateBase
 
         WriteAnimatorParams(ctx, speed);
     }
+    #endregion
 
+    #region 位移与动画参数（OnAnimatorMove / WriteAnimatorParams）
     public override void OnAnimatorMove(PlayerContext ctx)
     {
         // 地面：沿用动画根运动（水平）+ 手写垂直分量（早期原型 同款）；
@@ -166,7 +169,7 @@ public class Unarmed_Normal_Ground_State : PlayerStateBase
             }
         }
 
-        var anim = ctx.Animator;
+        var anim = ctx.AnimParams;   // 值缓存写入器：同值跳过 SetFloat
         // 水平面内速度分量：非瞄准时角色朝向移动方向——全速进前后轴（vertical speed），左右轴固定为 0
         anim.SetFloat(PlayerControllerScript.AnimVerticalSpeed, horizontalSpeed);
         anim.SetFloat(PlayerControllerScript.AnimHorizontalSpeed, ctx.Values.nonAimLateralSpeed);
@@ -174,4 +177,5 @@ public class Unarmed_Normal_Ground_State : PlayerStateBase
         anim.SetFloat(PlayerControllerScript.AnimFallingSpeed,
                       landingBlendActive ? landingFallBlend : NoLandingFallSpeed);
     }
+    #endregion
 }

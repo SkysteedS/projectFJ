@@ -21,6 +21,8 @@ using UnityEngine.Animations.Rigging;
 public class PlayerContext
 {
     public readonly Animator Animator;                                   // 写动画参数 / 查动画状态
+    /// <summary>Animator 参数缓存写入器（同值跳过；状态类与主体类写速度/姿态参数统一走这里，见 PlayerAnimatorParams）。</summary>
+    public readonly PlayerAnimatorParams AnimParams;
     public readonly CharacterController CharacterController;             // 执行位移：Move(delta)
     public readonly Transform Transform;                                 // 读写位置/旋转
     public readonly Camera MainCamera;
@@ -38,20 +40,23 @@ public class PlayerContext
     public readonly ChainIKConstraint LeftArmChainConstraint;
     #endregion
 
-    #region 瞄准引导约束（Multi-Aim：枪/头/胸指向目标）
+    #region 瞄准引导约束（Multi-Aim：头/胸指向目标；枪方向由轴点旋转程序化覆盖，不再使用 Multi-Aim）
     // 用途：瞄准状态每帧把各约束 SourceObjects[0] 的目标对象【位置】设为"相机中心射线命中点/远点"，
-    // 让枪口/视线/上身指向瞄准点。只移动目标位置，约束引用（装配即定）不被改写。
+    // 让视线/上身指向瞄准点。只移动目标位置，约束引用（装配即定）不被改写。
     // 权重（constraint.weight）由动画状态机参数经 SetIKweight 回写，本上下文不写。
-    public readonly MultiAimConstraint RifleAimConstraint;
     public readonly MultiAimConstraint HeadAimConstraint;
     public readonly MultiAimConstraint BodyAimConstraint;
 
     /// <summary>枪根（PlayerControllerScript.Rifle）：瞄准时作为轴点的子级。</summary>
     public readonly Transform RifleRoot;
+    /// <summary>手枪根（PlayerControllerScript.Pistol）：手枪正常状态左手 IK 计算用（未装配时手枪状态跳过左手写入并告警一次）。</summary>
+    public readonly Transform PistolRoot;
     /// <summary>轴点（PlayerControllerScript.aimAxisPoint）：旋转不变点；代码只读，不写它的 transform。</summary>
     public readonly Transform AimAxisPoint;
     /// <summary>枪根作为轴点子级时的 localPosition（PlayerControllerScript.aimAxisOffset）。</summary>
     public readonly Vector3 RifleAxisOffset;
+    /// <summary>手枪根作为轴点子级时的 localPosition（PlayerControllerScript.pistolAimAxisOffset；手枪与步枪到轴点距离不同，独立标定）。</summary>
+    public readonly Vector3 PistolAxisOffset;
     /// <summary>退出瞄准时枪要恢复的父级（PlayerControllerScript.RightHandWrist；为空时用进入前父级）。</summary>
     public readonly Transform RightHandWrist;
 
@@ -142,13 +147,15 @@ public class PlayerContext
                          TwoBoneIKConstraint rightHandConstraint, TwoBoneIKConstraint leftHandConstraint,
                          TwoBoneIKConstraint rightLegConstraint, TwoBoneIKConstraint leftLegConstraint,
                          PlayerMotionValuesSO values = null, WallProbe wallProbe = null,
-                         MultiAimConstraint rifleAimConstraint = null, MultiAimConstraint headAimConstraint = null,
+                         MultiAimConstraint headAimConstraint = null,
                          MultiAimConstraint bodyAimConstraint = null,
                          ChainIKConstraint rightArmChainConstraint = null, ChainIKConstraint leftArmChainConstraint = null,
                          Transform rifleRoot = null, Transform aimAxisPoint = null,
-                         Vector3 rifleAxisOffset = default, Transform rightHandWrist = null)
+                         Vector3 rifleAxisOffset = default, Transform rightHandWrist = null,
+                         Transform pistolRoot = null, Vector3 pistolAxisOffset = default)
     {
         Animator = animator;
+        AnimParams = new PlayerAnimatorParams(animator);
         CharacterController = characterController;
         Transform = transform;
         MainCamera = mainCamera;
@@ -163,12 +170,13 @@ public class PlayerContext
         // 未在 Inspector 指派资产时用运行时默认实例兜底（内存对象、不落盘不共享；正常应指派资产）
         Values = values != null ? values : ScriptableObject.CreateInstance<PlayerMotionValuesSO>();
         WallProbe = wallProbe ?? new WallProbe();
-        RifleAimConstraint = rifleAimConstraint;
         HeadAimConstraint = headAimConstraint;
         BodyAimConstraint = bodyAimConstraint;
         RifleRoot = rifleRoot;
+        PistolRoot = pistolRoot;
         AimAxisPoint = aimAxisPoint;
         RifleAxisOffset = rifleAxisOffset;
+        PistolAxisOffset = pistolAxisOffset;
         RightHandWrist = rightHandWrist;
     }
 

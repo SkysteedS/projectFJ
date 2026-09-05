@@ -2,30 +2,32 @@ using UnityEngine;
 using UnityEngine.Animations.Rigging;
 
 /// <summary>
-/// 具体状态：步枪（Rifle）× 瞄准（Aiming）× 着地（Ground）。
-/// 瞄准移动与 早期原型（UpdateAimSpeed/aim 分支）一致：
+/// 具体状态：手枪（Pistol）× 瞄准（Aiming）× 着地（Ground）。
+/// 直接复刻自 Rifle_Aiming_Ground_State（rifle 瞄准方案原样复制；差异仅枪根与 offset：
+/// 枪根 = ctx.PistolRoot、offset = ctx.PistolAxisOffset——手枪与步枪到轴点的距离不同，
+/// 故手枪单独标定 pistolAimAxisOffset，见 PlayerControllerScript）。行为要点：
 /// - 旋转：始终朝向相机水平前方（look 改变相机朝向时角色随之旋转；SmoothDampAngle 阻尼追角，
 ///   参数 aimRotateSmoothTime / aimRotateMaxSpeed；无移动输入也持续追踪——"相机朝哪、角色朝哪"）；
 /// - 速度：瞄准锁定行走档（不接受奔跑，Shift 无效：跑 + 瞄准表现不可用）；档位速度平滑后，
 ///   投影到相机前/右轴得到前后/左右目标，两轴各自 MoveTowards 平滑（aimAcceleration），供 2D 混合树（horizontal/vertical speed）；
 /// - 垂直：着地保持向下压速度；瞄准中走下边沿 → 累积重力，过死区后【提议】
-///   （Rifle, Normal, Jumping）（请求边裁决——瞄准状态没有滞空组合，切过去即取消瞄准）；
+///   （Pistol, Normal, Jumping）（请求边裁决——瞄准状态没有滞空组合，切过去即取消瞄准）；
 /// - 位移：OnAnimatorMove 沿用动画根运动（2D 混合树）+ 手写垂直分量（早期原型 同款）；
 /// - 动画参数：本类只写水平/垂直速度分量；body/hand/handing 由主体类按状态组合同步
 ///   （本状态 Hand=Aiming → hand posture=1 驱动瞄准动画分支）。
 ///
-/// 程序化 IK 接管（本轮定稿）：
+/// 程序化 IK 接管（与 rifle 定稿一致）：
 /// - 轴点（aimAxisPoint）由用户在场景放置并传入，是枪的旋转不变点；
 ///   代码对轴点只读，绝不写它的父级、位置或旋转。
 /// - 进入瞄准：枪根设为轴点的子级（只改枪的父级），过渡期内把枪根 local 平滑修正到
-///   aimAxisOffset（offset 即枪根作为轴点子级时的 localPosition）。
-/// - 瞄准全程：每帧写入 枪根.localPosition = aimAxisOffset、localRotation = 轴点坐标系基准（identity），
-///   因此 Inspector 调整 aimAxisOffset 立即生效；轴点旋转由 TickAxisRotation 程序化推进
+///   pistolAimAxisOffset（offset 即枪根作为轴点子级时的 localPosition；手枪与步枪到轴点距离不同，独立字段）。
+/// - 瞄准全程：每帧写入 枪根.localPosition = pistolAimAxisOffset、localRotation = 轴点坐标系基准（identity），
+///   因此 Inspector 调整 pistolAimAxisOffset 立即生效；轴点旋转由 TickAxisRotation 程序化推进
 ///   （PlayerControllerScript.LateUpdate 应用），枪作为子级自动跟随，不使用 Multi-Aim 约束。
 /// - 双手：进入瞬间捕获"腕-枪"相对位姿，每帧按枪根当前位姿推算并写入左右手 ChainIK target。
 /// - 退出：把枪设回进入前父级（优先 RightHandWrist）并恢复 local TRS，交还动画系统。
 /// </summary>
-public class Rifle_Aiming_Ground_State : PlayerStateBase
+public class Pistol_Aiming_Ground_State : PlayerStateBase
 {
     #region 状态内结构常量（语义见注释；可调参数见 PlayerMotionValuesSO）
     /// <summary>着地（非下落）时 falling speed 分量的常态值。</summary>
@@ -46,9 +48,9 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
     float aimAlignTimer;        // 进入对齐阶段剩余时长（>0 时用高响应平滑时间快速到位）
 
     // —— 程序化 IK 接管（轴点位置只读；旋转由 PlayerControllerScript.LateUpdate 程序化覆盖；枪根为轴点子级；双手由枪根反推）——
-    Transform rigRoot;                  // 枪根（ctx.RifleRoot）
+    Transform rigRoot;                  // 枪根（ctx.PistolRoot）
     Transform rigPivot;                 // 轴点（ctx.AimAxisPoint；本类不写它的 transform，旋转覆盖在主体类 LateUpdate）
-    Vector3 rigOffset;                  // 枪根作为轴点子级时的 localPosition（ctx.RifleAxisOffset）
+    Vector3 rigOffset;                  // 枪根作为轴点子级时的 localPosition（ctx.PistolAxisOffset）
     bool rigHeld;                       // true = 瞄准 IK 接管中（枪根已切到轴点下）
     Transform rigSavedParent;           // 进入前父级（优先 ctx.RightHandWrist）
     Vector3 rigSavedLocalPosition;      // 进入前 local TRS（退出时恢复，交还动画系统）
@@ -164,11 +166,11 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
         velocity.y = vertical;
         ctx.Motion.Velocity = velocity;
 
-        // 离地且垂直速度越过死区 → 提议（步枪正常手部滞空，请求边裁决；瞄准无滞空组合，切换即取消瞄准）
+        // 离地且垂直速度越过死区 → 提议（手枪正常手部滞空，请求边裁决；瞄准无滞空组合，切换即取消瞄准）
         if (!ctx.IsGrounded
             && (vertical < ctx.Values.airborneFallThreshold || vertical > ctx.Values.airborneRiseThreshold))
         {
-            ctx.RequestTransition(PlayerHanding.Rifle, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping);
+            ctx.RequestTransition(PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping);
             return;
         }
 
@@ -208,7 +210,7 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
         ctx.LastAimHit = hit;
 
         bool transitioning = rigHeld && rigTransitionRemaining > 0f;
-        Vector3 gunTarget = transitioning ? RifleFrontTarget(ctx) : lookPoint;
+        Vector3 gunTarget = transitioning ? PistolFrontTarget(ctx) : lookPoint;
 
         // 枪口专用瞄准点：过渡期=角色身前点（角色仍在转身对齐，不追相机落点）；
         // 平时=视线远点。PlayerControllerScript.LateUpdate 据此覆盖轴点旋转。
@@ -243,9 +245,9 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
     /// </summary>
     void BeginAimRig(PlayerContext ctx)
     {
-        rigRoot = ctx.RifleRoot;
+        rigRoot = ctx.PistolRoot;
         rigPivot = ctx.AimAxisPoint;
-        rigOffset = ctx.RifleAxisOffset;
+        rigOffset = ctx.PistolAxisOffset;
         rigHeld = false;
         rigSavedParent = null;
         rigTransitionRemaining = 0f;
@@ -318,9 +320,9 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
     }
 
     /// <summary>
-    /// 过渡期：枪根 local 从切父起点平滑过渡到（aimAxisOffset, 轴点坐标系基准旋转）。
-    /// 过渡结束后每帧持续写入 localPosition = aimAxisOffset、localRotation = identity，
-    /// 使 Inspector 调整 offset 立即生效；轴点本身始终不被写入。
+    /// 过渡期：枪根 local 从切父起点平滑过渡到（ctx.PistolAxisOffset / pistolAimAxisOffset, 轴点坐标系基准旋转）。
+    /// 过渡结束后每帧持续写入 localPosition = pistolAimAxisOffset、localRotation = identity，
+    /// 使 Inspector 调整 pistolAimAxisOffset 立即生效；轴点本身始终不被写入。
     /// </summary>
     void TickAimRigTransition(PlayerContext ctx)
     {
@@ -341,13 +343,13 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
             return;
         }
 
-        // 稳定期：持续应用 offset（轴点坐标系下的 local），改 aimAxisOffset 即时生效
+        // 稳定期：持续应用 offset（轴点坐标系下的 local），改 pistolAimAxisOffset 即时生效
         rigRoot.localPosition = rigOffset;
         rigRoot.localRotation = Quaternion.identity;
     }
 
     /// <summary>过渡期枪口 aim 目标：角色身前（沿角色 forward 的远点；水平原点取轴点，保证无额外俯仰）。</summary>
-    Vector3 RifleFrontTarget(PlayerContext ctx)
+    Vector3 PistolFrontTarget(PlayerContext ctx)
     {
         Vector3 origin = rigPivot != null
             ? rigPivot.position
@@ -525,3 +527,4 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
     }
     #endregion
 }
+

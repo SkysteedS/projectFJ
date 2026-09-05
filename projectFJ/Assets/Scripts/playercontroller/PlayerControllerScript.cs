@@ -6,7 +6,7 @@ public enum PlayerHanding
 {
     Unarmed = 0,
     Rifle = 1,
-    Sword = 2,
+    Pistol = 2,  // 手枪
     Grenade = 3
 }
 
@@ -33,7 +33,7 @@ public class PlayerControllerScript : MonoBehaviour
     public static readonly int AnimBodyPosture = Animator.StringToHash("body posture");
     /// <summary>hand posture（Int）：0 正常 / 1 瞄准（对应 PlayerHandPosture）。</summary>
     public static readonly int AnimHandPosture = Animator.StringToHash("hand posture");
-    /// <summary>player handing（Int）：0 空手 / 1 步枪 / 2 剑 / 3 手雷（对应 PlayerHanding）。</summary>
+    /// <summary>player handing（Int）：0 空手 / 1 步枪 / 2 手枪 / 3 手雷（对应 PlayerHanding）。</summary>
     public static readonly int AnimPlayerHanding = Animator.StringToHash("player handing");
     /// <summary>vertical speed（Float）：水平面内【前后轴】速度（m/s），非瞄准时全速计入此轴。</summary>
     public static readonly int AnimVerticalSpeed = Animator.StringToHash("vertical speed");
@@ -62,6 +62,8 @@ public class PlayerControllerScript : MonoBehaviour
     Camera mainCamera;
 
     public GameObject Rifle;
+    /// <summary>手枪根（PlayerControllerScript.Pistol）：手枪正常状态左手 IK 目标参照；由你在场景拖入，未接入前可为空。</summary>
+    public GameObject Pistol;
     public GameObject RightHandWrist;
 
     [Tooltip("轴点（旋转不变点/枪托抵肩点）：由你在场景放置并拖入；是 Multi-Aim 的约束对象。代码只读，不写它的 transform")]
@@ -70,6 +72,9 @@ public class PlayerControllerScript : MonoBehaviour
     [Tooltip("枪根作为轴点子级时的 localPosition（offset）：瞄准期间每帧写入，Inspector 调整后立即生效")]
     public Vector3 aimAxisOffset = Vector3.zero;
 
+    [Tooltip("手枪根作为轴点子级时的 localPosition（offset）：手枪瞄准期间每帧写入；手枪与步枪到轴点的距离不同，需单独标定，Inspector 调整后立即生效")]
+    public Vector3 pistolAimAxisOffset = Vector3.zero;
+
     public TwoBoneIKConstraint rightHandConstraint;
     public ChainIKConstraint rightArmChainConstraint;
     public TwoBoneIKConstraint leftHandConstraint;
@@ -77,7 +82,6 @@ public class PlayerControllerScript : MonoBehaviour
     public TwoBoneIKConstraint rightLegConstraint;
     public TwoBoneIKConstraint leftLegConstraint;
 
-    public MultiAimConstraint rifleAimConstraint;
     public MultiAimConstraint headAimConstraint;
     public MultiAimConstraint bodyAimConstraint;
     #endregion
@@ -98,9 +102,11 @@ public class PlayerControllerScript : MonoBehaviour
 
     [Header("墙面探测（攀爬检测，参数化射线阵列，见 WallProbe.cs）")]
     [SerializeField] WallProbe wallProbe = new WallProbe();
+    #endregion
 
+    #region 调试可视化（Gizmos：开关配置 + 全部绘制；仅编辑器/开发构建调用，与业务逻辑隔离）
     [Header("调试 Gizmos（全部默认关闭；勾选后按类别在 Scene 视图显示）")]
-    [Tooltip("瞄准调试（相机瞄准线/落点/枪口轴向）")]
+    [Tooltip("瞄准调试（相机瞄准线/落点）")]
     [SerializeField] bool showAimGizmos;
     [Tooltip("攀爬手/脚 IK 调试（目标、手骨实际位置、连线）")]
     [SerializeField] bool showClimbIkGizmos;
@@ -110,8 +116,10 @@ public class PlayerControllerScript : MonoBehaviour
     [SerializeField] bool showWallProbeGizmos;
     [Tooltip("着地探测调试（选中角色时显示）")]
     [SerializeField] bool showGroundProbeGizmos;
+    [Tooltip("临时调试：打印 body posture 参数过渡时间线（脚本姿态 vs Animator 实际参数 + 当前/下一状态 + 是否过渡中），排查脚本状态机与动画状态机不同步；确认后删除")]
+    [SerializeField] bool debugBodyPostureTimeline;
 
-    /// <summary>编辑模式选中角色时显示着地探测 Gizmos（下沿球/射线/命中点）。</summary>
+    /// <summary>编辑模式/运行时选中角色时显示着地/墙面探测 Gizmos（受对应开关门控）。</summary>
     void OnDrawGizmosSelected()
     {
         var cc = characterController != null ? characterController : GetComponent<CharacterController>();
@@ -121,7 +129,7 @@ public class PlayerControllerScript : MonoBehaviour
 
     /// <summary>
     /// 调试可视化（Scene 视图常驻，运行时生效）：
-    /// - 瞄准：落点（命中=青线绿球 / 远点=黄线黄球）+ 枪约束驱动对象（白球 + 品红瞄准轴射线）；
+    /// - 瞄准：落点（命中=青线绿球 / 远点=黄线黄球）；
     /// - 攀爬 IK（showClimbIkGizmos 且正攀爬时）：青色 = 双手 IK 目标，
     ///   黄色 = 手骨（腕）实际位置，红色 = 目标到手骨连线（线越长 = IK 越没拉到位）。
     /// - 登顶探测（showClimbTopOutGizmos）：手掌锚点上方射向墙面的射线——黄色 = 命中墙面（仍在爬），
@@ -146,18 +154,6 @@ public class PlayerControllerScript : MonoBehaviour
             Gizmos.DrawLine(mainCamera.transform.position, context.LastAimPoint);
         Gizmos.DrawWireSphere(context.LastAimPoint, 0.06f);
 
-        if (rifleAimConstraint != null)
-        {
-            Transform gun = rifleAimConstraint.data.constrainedObject;
-            if (gun != null)
-            {
-                Vector3 axis = AimAxisToVector(rifleAimConstraint.data.aimAxis);
-                Gizmos.color = Color.white;
-                Gizmos.DrawWireSphere(gun.position, 0.04f);
-                Gizmos.color = Color.magenta;
-                Gizmos.DrawRay(gun.position, gun.rotation * axis * 20f);
-            }
-        }
     }
 
     /// <summary>攀爬手部 IK 调试绘制（攀爬状态经 PlayerContext 每帧写入；非攀爬时 ClimbIkDebugActive = false 不绘制）。</summary>
@@ -238,18 +234,6 @@ public class PlayerControllerScript : MonoBehaviour
         Gizmos.DrawRay(t.position, t.forward * axisLen);
     }
 
-    static Vector3 AimAxisToVector(MultiAimConstraintData.Axis axis)
-    {
-        switch (axis)
-        {
-            case MultiAimConstraintData.Axis.X: return Vector3.right;
-            case MultiAimConstraintData.Axis.X_NEG: return Vector3.left;
-            case MultiAimConstraintData.Axis.Y: return Vector3.up;
-            case MultiAimConstraintData.Axis.Y_NEG: return Vector3.down;
-            case MultiAimConstraintData.Axis.Z: return Vector3.forward;
-            default: return Vector3.back;   // Z_NEG
-        }
-    }
     #endregion
 
     #region 状态机（扁平单机：一个扁平状态枚举 Current + 一个状态类字典 + 一张转换边表）
@@ -258,23 +242,58 @@ public class PlayerControllerScript : MonoBehaviour
     #endregion
 
     #region IK
+    // IK 权重值缓存（float.NaN 初值保证首帧必写；同值帧跳过 constraint.weight 赋值）
+    float lastRightHandWeight = float.NaN;
+    float lastLeftHandWeight = float.NaN;
+    float lastRightLegWeight = float.NaN;
+    float lastLeftLegWeight = float.NaN;
+    float lastRightArmChainWeight = float.NaN;
+    float lastLeftArmChainWeight = float.NaN;
+    float lastHeadAimWeight = float.NaN;
+    float lastBodyAimWeight = float.NaN;
+
+    /// <summary>
+    /// IK 权重桥接（架构约定：权重由动画层参数控制，此处只做"读参数 → 回写 constraint.weight"）。
+    /// 每帧读取动画参数并回写对应约束；约束未装配时跳过（null 防御，避免空手场景也 NRE）。
+    /// 值缓存：仅当读到的参数与上次写入不同才赋 constraint.weight（多数帧同值，跳过赋值开销）。
+    /// </summary>
     void SetIKweight()
     {
-        rightHandConstraint.weight = animator.GetFloat(AnimRightHandIKWeight);
-        leftHandConstraint.weight = animator.GetFloat(AnimLeftHandIKWeight);
-        rightArmChainConstraint.weight = animator.GetFloat(AnimRightArmChainIKWeight);
-        leftArmChainConstraint.weight = animator.GetFloat(AnimLeftArmChainIKWeight);
-        rightLegConstraint.weight = animator.GetFloat(AnimRightLegIKWeight);
-        leftLegConstraint.weight = animator.GetFloat(AnimLeftLegIKWeight);
-        if (headAimConstraint != null)
-            headAimConstraint.weight = animator.GetFloat(AnimHeadAimIKWeight);
-        if (bodyAimConstraint != null)
-            bodyAimConstraint.weight = animator.GetFloat(AnimBodyAimIKWeight);
-        // rifle Multi-Aim 已由"轴点旋转程序化覆盖"（LateUpdate 确定性写入）退役：
-        // 强制 0——即使场景中组件仍存在/将来误重挂回轴点，也不参与求值，
-        // 避免与确定性旋转（rigAxisRotation）冲突造成手/枪偶发错位穿模
-        if (rifleAimConstraint != null)
-            rifleAimConstraint.weight = 0f;
+        WriteConstraintWeight(rightHandConstraint, AnimRightHandIKWeight, ref lastRightHandWeight);
+        WriteConstraintWeight(leftHandConstraint, AnimLeftHandIKWeight, ref lastLeftHandWeight);
+        WriteConstraintWeight(rightLegConstraint, AnimRightLegIKWeight, ref lastRightLegWeight);
+        WriteConstraintWeight(leftLegConstraint, AnimLeftLegIKWeight, ref lastLeftLegWeight);
+        WriteConstraintWeight(rightArmChainConstraint, AnimRightArmChainIKWeight, ref lastRightArmChainWeight);
+        WriteConstraintWeight(leftArmChainConstraint, AnimLeftArmChainIKWeight, ref lastLeftArmChainWeight);
+        WriteConstraintWeight(headAimConstraint, AnimHeadAimIKWeight, ref lastHeadAimWeight);
+        WriteConstraintWeight(bodyAimConstraint, AnimBodyAimIKWeight, ref lastBodyAimWeight);
+    }
+
+    void WriteConstraintWeight(TwoBoneIKConstraint constraint, int paramHash, ref float lastWeight)
+    {
+        if (constraint == null) return;
+        float next = animator.GetFloat(paramHash);
+        if (lastWeight == next) return;
+        lastWeight = next;
+        constraint.weight = next;
+    }
+
+    void WriteConstraintWeight(ChainIKConstraint constraint, int paramHash, ref float lastWeight)
+    {
+        if (constraint == null) return;
+        float next = animator.GetFloat(paramHash);
+        if (lastWeight == next) return;
+        lastWeight = next;
+        constraint.weight = next;
+    }
+
+    void WriteConstraintWeight(MultiAimConstraint constraint, int paramHash, ref float lastWeight)
+    {
+        if (constraint == null) return;
+        float next = animator.GetFloat(paramHash);
+        if (lastWeight == next) return;
+        lastWeight = next;
+        constraint.weight = next;
     }
 
     /// <summary>
@@ -364,13 +383,22 @@ public class PlayerControllerScript : MonoBehaviour
 
         PlayerMotionValuesSO v = context.Values;
 
-        // 持枪标定位：标定值（Chest 局部）还原到世界
+        // 持枪标定位：标定值（Chest 局部）还原到世界——按当前手持选择锚点：
+        // 手枪（Handing=Pistol）用 pistolRightHandAnchor*，其余（步枪）用 chestRightHandAnchor*
+        bool isPistol = context.Handing == PlayerHanding.Pistol;
+        Vector3 holdAnchorLocalPos = isPistol
+            ? v.pistolRightHandAnchorLocalPosition
+            : v.chestRightHandAnchorLocalPosition;
+        Quaternion holdAnchorLocalRot = Quaternion.Euler(isPistol
+            ? v.pistolRightHandAnchorLocalEuler
+            : v.chestRightHandAnchorLocalEuler);
+
         Transform anchor = twoBoneTarget.parent;
         Vector3 holdPos = anchor != null
-            ? anchor.TransformPoint(v.chestRightHandAnchorLocalPosition)
+            ? anchor.TransformPoint(holdAnchorLocalPos)
             : twoBoneTarget.position;
         Quaternion holdRot = anchor != null
-            ? anchor.rotation * Quaternion.Euler(v.chestRightHandAnchorLocalEuler)
+            ? anchor.rotation * holdAnchorLocalRot
             : twoBoneTarget.rotation;
 
         // 瞄准位：ChainIK target 当前值（进瞄准 = 本帧瞄准状态已写入；退瞄准 = 上一帧瞄准值快照）
@@ -423,11 +451,12 @@ public class PlayerControllerScript : MonoBehaviour
     /// 此处只做应用：写入轴点 worldRotation。
     /// 关键：双手 ChainIK target 与轴点写入使用【同一确定性旋转】——若在本处各自推进/
     /// 推算，两者会用到不同时点的旋转，导致"枪先转、手后算"的同帧错位穿模（已修复）。
-    /// 轴向语义：与原 rifle Multi-Aim（aimAxis=Z_NEG）一致——aimAxisNegZ=true 时让轴点 -Z 指向瞄准点。
+    /// 轴向语义：沿用原枪口装配约定（aimAxis=Z_NEG）——aimAxisNegZ=true 时让轴点 -Z 指向瞄准点。
     /// </summary>
     void LateUpdate()
     {
         LogRightHandIkFrameEnd();   // 帧末调试日志：Animator 求值后、渲染前的实际值
+        LogBodyPostureTimeline();   // 临时调试：body posture 参数过渡时间线（Animator 求值后读取，确认后删除）
 
         if (context == null || !context.AimRigActive) return;
         Transform pivot = context.AimAxisPoint;
@@ -458,23 +487,81 @@ public class PlayerControllerScript : MonoBehaviour
     /// </summary>
     void SyncAnimatorPostureParams()
     {
-        if (machine == null) return;
-        animator.SetInteger(AnimBodyPosture, (int)machine.Body);
-        animator.SetInteger(AnimHandPosture, (int)machine.Hand);
-        animator.SetInteger(AnimPlayerHanding, (int)machine.Handing);
+        if (machine == null || context == null) return;
+        // 经 AnimParams 缓存写入：姿态参数多数帧不变，同值跳过 SetInteger
+        context.AnimParams.SetInteger(AnimBodyPosture, (int)machine.Body);
+        context.AnimParams.SetInteger(AnimHandPosture, (int)machine.Hand);
+        context.AnimParams.SetInteger(AnimPlayerHanding, (int)machine.Handing);
     }
+
+    #region 调试 · body posture 参数过渡时间线（临时 DEBUG：排查脚本/动画状态机不同步，确认后删除）
+    /// <summary>当前/下一状态名解析用状态短名表（须与 PlayerAnimationController 中 AnimatorState.m_Name 一致；未知名回退打印短名哈希）。</summary>
+    static readonly string[] DebugBodyPostureStateNames =
+    {
+        "unarmed locomotion", "jump", "climb", "climb to end",
+        "rifle unaiming locomotion", "pistol unaiming locomotion", "locomotion", "DoNothing"
+    };
+
+    int debugPostureLastParam = int.MinValue;
+    bool debugPostureLastInTransition;
+    int debugPostureLastCurrentHash;
+    int debugPostureLastNextHash;
+
+    /// <summary>
+    /// 在 LateUpdate（Animator 求值后、当前帧渲染前）调用：打印动画机这一帧实际消费的
+    /// body posture 参数值、基础层当前/下一状态与过渡进度，便于核对参数是否真的按 1→2→3 走过、
+    /// 以及动画机在参数=3 期间是否仍停留在 jump→climb 过渡中。
+    /// 只在参数/当前状态/下一状态/过渡标志发生变化时输出一行（形成紧凑时间线，不刷屏）。
+    /// </summary>
+    void LogBodyPostureTimeline()
+    {
+        if (!debugBodyPostureTimeline || machine == null || animator == null) return;
+
+        int posture = animator.GetInteger(AnimBodyPosture);
+        bool inTrans = animator.IsInTransition(0);
+        var cur = animator.GetCurrentAnimatorStateInfo(0);
+        var nxt = inTrans ? animator.GetNextAnimatorStateInfo(0) : default;
+        int curHash = cur.shortNameHash;
+        int nxtHash = inTrans ? nxt.shortNameHash : 0;
+
+        bool changed = posture != debugPostureLastParam
+                       || inTrans != debugPostureLastInTransition
+                       || curHash != debugPostureLastCurrentHash
+                       || nxtHash != debugPostureLastNextHash;
+        if (!changed) return;
+
+        debugPostureLastParam = posture;
+        debugPostureLastInTransition = inTrans;
+        debugPostureLastCurrentHash = curHash;
+        debugPostureLastNextHash = nxtHash;
+
+        string trans = "";
+        if (inTrans)
+        {
+            var info = animator.GetAnimatorTransitionInfo(0);
+            trans = $" | transDur={info.duration:F3}s transNt={info.normalizedTime:F3}";
+        }
+        string curTag = cur.tagHash == Animator.StringToHash("ClimbToEnd") ? " [Tag:ClimbToEnd]" : "";
+        string nextTag = inTrans && nxt.tagHash == Animator.StringToHash("ClimbToEnd") ? " [nextTag:ClimbToEnd]" : "";
+        Debug.Log($"[BodyPostureDebug] f{Time.frameCount} t={Time.time:F3} | scriptBody={(int)machine.Body} animPosture={posture} | " +
+                  $"cur={DebugResolveStateName(curHash)} nt={cur.normalizedTime:F3}{curTag} next={DebugResolveStateName(nxtHash)}{nextTag} " +
+                  $"inTrans={inTrans}{trans}", this);
+    }
+
+    static string DebugResolveStateName(int hash)
+    {
+        for (int i = 0; i < DebugBodyPostureStateNames.Length; i++)
+        {
+            if (Animator.StringToHash(DebugBodyPostureStateNames[i]) == hash) return DebugBodyPostureStateNames[i];
+        }
+        return $"#{hash}";
+    }
+    #endregion
     #endregion
 
     #region Animation Event 分发
     // 入口写在主体类（Animator 所在对象）：Rifle 引用已在手，Rifle.GetComponent<WeaponSwitch>()
     // 直接取到武器切换脚本，无需再挂独立组件/拖引用。
-
-    /// <summary>
-    /// 登顶动画事件：climb to end.anim 在 1.0s（悬挂结束）处触发。函数名与动画事件面板的
-    /// functionName 一致（勿改，改会断事件）；收到后经状态机转发给当前登顶状态，由其中断悬挂手匹配。
-    /// </summary>
-    public void HandGrabEdgeEnd()
-        => machine?.NotifyAnimEvent(Unarmed_Normal_ClimbTopOut_State.AnimEventHandGrabEdgeEnd);
 
     /// <summary>武器动画事件入口（仅 String 参数）。</summary>
     public void OnWeaponEvent(string message) => DispatchWeaponEvent(message);
@@ -488,27 +575,59 @@ public class PlayerControllerScript : MonoBehaviour
     /// <summary>武器动画事件入口（Float + Int + String + Object 参数）。</summary>
     public void OnWeaponEvent(float value, int index, string message, Object sender) => DispatchWeaponEvent(message);
 
-    /// <summary>按分发键调用 rifle 上 WeaponSwitch 的切换操作。</summary>
+    /// <summary>武器动画事件分发：按分发键调用对应武器（rifle/pistol）上 WeaponSwitch 的切换操作。</summary>
     void DispatchWeaponEvent(string message)
     {
-        // GetComponentInChildren：WeaponSwitch 挂在 Rifle 本体或 rifle 内部子对象（如 handle）均可命中
-        WeaponSwitch weaponSwitch = Rifle != null ? Rifle.GetComponentInChildren<WeaponSwitch>(true) : null;
-        if (weaponSwitch == null)
-        {
-            Debug.LogWarning($"[WeaponEvent] 武器事件 '{message}' 未找到 WeaponSwitch（Rifle 未指派或 Rifle（含子物体）上无该组件）", this);
-            return;
-        }
         switch (message)
         {
             case "GrabRifle":
-                weaponSwitch.SwitchToInUse();      // 拔枪：切到使用中挂点，isUsing = true
+                SwitchWeaponMount(Rifle, true, message);   // 拔枪：切到使用中挂点
                 break;
             case "PutRifle":
-                weaponSwitch.SwitchToStored();     // 收枪：切到未使用/收纳挂点，isUsing = false
+                SwitchWeaponMount(Rifle, false, message);  // 收枪：切到收纳挂点
+                break;
+            case "GrabPistol":
+                SwitchWeaponMount(Pistol, true, message);  // 拔手枪：切到使用中挂点
+                break;
+            case "PutPistol":
+                SwitchWeaponMount(Pistol, false, message); // 收手枪：切到收纳挂点
                 break;
             default:
                 Debug.LogWarning($"[WeaponEvent] 未处理的分发键：{message}", this);
                 break;
+        }
+    }
+
+    /// <summary>
+    /// 把指定武器的单实体挂点切到使用中/收纳位。
+    /// GetComponentInChildren：WeaponSwitch 挂在武器本体或内部子对象（如 handle）均可命中。
+    /// </summary>
+    void SwitchWeaponMount(GameObject weaponRoot, bool switchToInUse, string message)
+    {
+        if (weaponRoot == null)
+        {
+            Debug.LogWarning(
+                $"[WeaponEvent] 武器事件 '{message}' 未找到武器根（Rifle/Pistol 字段未指派）",
+                this);
+            return;
+        }
+
+        WeaponSwitch weaponSwitch = weaponRoot.GetComponentInChildren<WeaponSwitch>(true);
+        if (weaponSwitch == null)
+        {
+            Debug.LogWarning(
+                $"[WeaponEvent] 武器事件 '{message}' 未找到 WeaponSwitch（{weaponRoot.name}（含子物体）上无该组件）",
+                this);
+            return;
+        }
+
+        if (switchToInUse)
+        {
+            weaponSwitch.SwitchToInUse();      // isUsing = true
+        }
+        else
+        {
+            weaponSwitch.SwitchToStored();     // isUsing = false
         }
     }
     #endregion
@@ -554,12 +673,14 @@ public class PlayerControllerScript : MonoBehaviour
         context = new PlayerContext(animator, characterController, playerTransform, mainCamera, input, machine,
                                     rightHandConstraint, leftHandConstraint, rightLegConstraint, leftLegConstraint,
                                     motionValues, wallProbe,
-                                    rifleAimConstraint, headAimConstraint, bodyAimConstraint,
+                                    headAimConstraint, bodyAimConstraint,
                                     rightArmChainConstraint, leftArmChainConstraint,
                                     Rifle != null ? Rifle.transform : null,
                                     aimAxisPoint,
                                     aimAxisOffset,
-                                    RightHandWrist != null ? RightHandWrist.transform : null);
+                                    RightHandWrist != null ? RightHandWrist.transform : null,
+                                    Pistol != null ? Pistol.transform : null,
+                                    pistolAimAxisOffset);
 
         // 状态注册（组合 → 状态类实例；工厂映射见 PlayerStateFactory。仅注册已实现的状态）
         machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
@@ -572,6 +693,12 @@ public class PlayerControllerScript : MonoBehaviour
             PlayerStateFactory.Create(PlayerHanding.Rifle, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping));
         machine.RegisterState(PlayerHanding.Rifle, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
             PlayerStateFactory.Create(PlayerHanding.Rifle, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground));
+        machine.RegisterState(PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            PlayerStateFactory.Create(PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Ground));
+        machine.RegisterState(PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping,
+            PlayerStateFactory.Create(PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping));
+        machine.RegisterState(PlayerHanding.Pistol, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
+            PlayerStateFactory.Create(PlayerHanding.Pistol, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground));
         machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Climbing,
             PlayerStateFactory.Create(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Climbing));
         machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.ClimbTopOut,
@@ -737,6 +864,93 @@ public class PlayerControllerScript : MonoBehaviour
                            || ctx.Motion.VerticalVelocity > ctx.Values.airborneRiseThreshold,
             label: "瞄准中走出边沿进入滞空"));
 
+        // —— 手枪 ——
+        // ⑪ 信号边：空手按 2（SlotPistol）→ 切换手枪（地面正常手部）。
+        //    条件阻塞：武器切换动画（Switching Weapon tag）播放期间禁止切换（与步枪 ④ 同规则）。
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            condition: ctx => !ctx.IsWeaponSwitchAnimPlaying(),
+            triggerSignal: PlayerInputState.Signal.SlotPistol,
+            label: "切换手枪"));
+
+        // ⑪b 信号边：手枪地面再按 2（SlotPistol）→ 收回手枪（切回空手）。
+        //    同样阻塞于武器切换动画（收回动画自身播放期间再按键无效）。
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            condition: ctx => !ctx.IsWeaponSwitchAnimPlaying(),
+            triggerSignal: PlayerInputState.Signal.SlotPistol,
+            label: "收回手枪（回空手）"));
+
+        // ⑫ 信号边：手枪地面按下 Jump → 起跳（需物理着地；与步枪 ⑤ 规则一致）
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping,
+            condition: ctx => ctx.IsGrounded,
+            triggerSignal: PlayerInputState.Signal.Jump,
+            label: "跳跃（手枪·地面起跳）"));
+
+        // ⑬ 请求边：手枪滞空 → 地面（落地；垂直速度 ≤ 判定阈值防起跳瞬间着地标志残留误判）
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping,
+            PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            condition: ctx => ctx.IsGrounded && ctx.Motion.VerticalVelocity <= ctx.Values.landingVerticalThreshold,
+            label: "落地（手枪）"));
+
+        // ⑭ 请求边：手枪地面 → 滞空（走出边沿：离地且垂直速度越过死区阈值；
+        //    条件与 Pistol_Normal_Ground_State 的提议一致）
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping,
+            condition: ctx => ctx.Motion.VerticalVelocity < ctx.Values.airborneFallThreshold
+                           || ctx.Motion.VerticalVelocity > ctx.Values.airborneRiseThreshold,
+            label: "走出边沿进入滞空（手枪）"));
+
+        // ⑮ 手枪瞄准进出（两种模式按 Values.aimToggleMode 互斥，与步枪 ⑦ 同规则；支持运行时切模式）——
+        //    按住模式（持久边）：按住 Aim 进入、松开退出
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            PlayerHanding.Pistol, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
+            condition: ctx => !ctx.Values.aimToggleMode && ctx.Input.Aim,
+            evaluateEveryFrame: true,
+            label: "手枪·按住瞄准"));
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Pistol, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
+            PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            condition: ctx => !ctx.Values.aimToggleMode && !ctx.Input.Aim,
+            evaluateEveryFrame: true,
+            label: "手枪·松开瞄准"));
+        //    切换模式（信号边）：按一次 Aim 进瞄准、再按一次退出
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            PlayerHanding.Pistol, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
+            condition: ctx => ctx.Values.aimToggleMode,
+            triggerSignal: PlayerInputState.Signal.AimPressed,
+            label: "手枪·切换瞄准（进）"));
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Pistol, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
+            PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            condition: ctx => ctx.Values.aimToggleMode,
+            triggerSignal: PlayerInputState.Signal.AimPressed,
+            label: "手枪·切换瞄准（出）"));
+
+        // ⑯ 信号边：手枪瞄准中按 Jump → 取消瞄准并起跳（切到正常手部滞空；与步枪 ⑥ 同规则）
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Pistol, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
+            PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping,
+            condition: ctx => ctx.IsGrounded,
+            triggerSignal: PlayerInputState.Signal.Jump,
+            label: "跳跃（手枪瞄准中·取消瞄准）"));
+
+        // ⑰ 请求边：手枪瞄准中走出边沿 → 切滞空正常手部（瞄准无滞空组合，切换即取消瞄准）
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Pistol, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
+            PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping,
+            condition: ctx => ctx.Motion.VerticalVelocity < ctx.Values.airborneFallThreshold
+                           || ctx.Motion.VerticalVelocity > ctx.Values.airborneRiseThreshold,
+            label: "瞄准中走出边沿进入滞空（手枪）"));
+
         // 进入初始状态（地面）
         machine.Enter(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground, context);
     }
@@ -771,9 +985,9 @@ public class PlayerControllerScript : MonoBehaviour
     {
         InputActionBridge.OnRifle(input, ctx);
     }
-    public void GetSwordInput(InputAction.CallbackContext ctx)
+    public void GetPistolInput(InputAction.CallbackContext ctx)
     {
-        InputActionBridge.OnSword(input, ctx);
+        InputActionBridge.OnPistol(input, ctx);
     }
     public void GetGrenadeInput(InputAction.CallbackContext ctx)
     {

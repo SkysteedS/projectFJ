@@ -39,7 +39,7 @@
 │  BodyStateMachine: Ground / Jumping / Climbing (+走廊状态)   │
 │  HandStateMachine: Normal / Aiming (+瞬时动作)               │
 ├────────────────────────────────────────────────────────────┤
-│ 装备轴（数据）  Handing: Unarmed / Rifle / Sword / Grenade   │
+│ 装备轴（数据）  Handing: Unarmed / Rifle / Pistol / Grenade   │
 │  ├─ HandingCapabilities  能力许可表（轴间交叉约束唯一来源）   │
 │  └─ 显隐 / 动画 / 未来武器数据                                │
 ├────────────────────────────────────────────────────────────┤
@@ -61,7 +61,7 @@
 | 类型 | 语义 | 示例 |
 |---|---|---|
 | 连续输入 | 帧快照滚动值，逻辑可读当前值 | Move / Look / Run / Aim / FireHeld |
-| 边沿信号（按下型） | Started 置位、跨帧保留、消费即清 | Jump / FirePressed / Reload / Interact / SlotRifle / SlotSword / SlotGrenade |
+| 边沿信号（按下型） | Started 置位、跨帧保留、消费即清 | Jump / FirePressed / Reload / Interact / SlotRifle / SlotPistol / SlotGrenade |
 
 > **Jump 信号语义**：统一的"移动动作"请求，**不设独立攀爬输入**。处理顺序：可攀爬检测优先（命中 → 进攀爬），未命中 → 跳跃。因此 Jump 会触发"攀爬优先、次选跳跃"的二选一转换，信号消费与裁决的约定见 §6.3。
 
@@ -94,7 +94,7 @@ Input System 回调在 Update 帧间任意时刻触发；若逻辑直接读实�
 | Aiming | Button | SetAim | 按住语义 |
 | Fire | Button | SetFireHeld + Press(FirePressed) | 按住 + 按下边沿双语义 |
 | Jump | Button | Press(Jump) | |
-| Rifle / Sword / HandGrenade | Button | Press(SlotRifle/Sword/Grenade) | 槽位切换到"信号" |
+| Rifle / Pistol / HandGrenade | Button | Press(SlotRifle/Pistol/Grenade) | 槽位切换到"信号" |
 | Reload | Button | Press(Reload) | |
 | Interacct | Button | Press(Interact) | action 名拼写为 Interacct |
 
@@ -111,10 +111,15 @@ test.cs 中 `handing`（当前武器）从输入层**移出**：它是"游戏状
 1. **共享运动描述 `PlayerMotion`（[已实现]）**：跨状态交接槽，挂在 PlayerContext.Motion——
    当前状态类每次计算完毕写入（速度向量），新状态 `Enter` 读取初值（滞空继承起跳水平速度、
    落地读取下落速度做姿态混合）。纯数据，不含计算。
-2. **运动数值服务（[已实现] = `PlayerMotionValues.cs`）**：物理常量（重力/走跑速度/加速度/旋转速度/跳跃高度/
-   攀爬速度/死区阈值）、速度平滑（MoveTowards）、重力累积、跳跃初速度反推、姿态混合值平滑、
+2. **运动数值服务（[已实现] = `PlayerMotionValuesSO`）**：物理常量（重力/走跑速度/加速度/旋转速度/跳跃高度/
+   攀爬速度/登顶参数/死区阈值）、速度平滑（MoveTowards）、重力累积、跳跃初速度反推、姿态混合值平滑、
    垂直速度参数换算（以姿态为参数的纯函数，无分支控制流）——状态类调用它计算，结果写回
-   `PlayerContext.Motion`；跨状态交接槽为 `PlayerMotion.cs`（纯数据，状态类写入、新状态读取）。
+   `PlayerContext.Motion`。SO 为**资产级单例**（场景组件只持引用，一处修改全局生效、Play Mode 实时调参），
+   Inspector 由 `Editor/PlayerMotionValuesSOEditor.cs` 按 [Header] 分组折叠。
+
+   Animator 参数写入统一经 `PlayerAnimatorParams`（挂在 PlayerContext.AnimParams）：**值缓存写入器**，
+   同值跳过 Set*（vertical/horizontal/falling speed、body/hand/handing 为脚本权威参数；被动画曲线控制的
+   IK 权重参数脚本不写，由动画层负责）。
 
 - **移除**：所有姿态分支控制流（姿态检测/切换决策）→ 移交给状态类
 - 运动交接的读写约定：**写入 = 当前状态类**（Tick/OnAnimatorMove 末尾），**读取 = 新状态**（Enter）
@@ -127,10 +132,10 @@ test.cs 中 `handing`（当前武器）从输入层**移出**：它是"游戏状
 
 ```
 三个枚举（保持正交，与 PlayerControllerScript 动画参数直接对齐）：
-  PlayerBodyPosture(Ground/Jumping/Climbing) · PlayerHandPosture(Normal/Aiming) · PlayerHanding(Unarmed/Rifle/Sword/Grenade)
+  PlayerBodyPosture(Ground/Jumping/Climbing) · PlayerHandPosture(Normal/Aiming) · PlayerHanding(Unarmed/Rifle/Pistol/Grenade)
 
 PlayerStateKey（内部键，外层不可见）：三枚举组合，当前合法组合（能力表推导）：
-  Unarmed×Normal×Ground / Rifle×Normal×Ground / Sword×Normal×Ground / Grenade×Normal×Ground
+  Unarmed×Normal×Ground / Rifle×Normal×Ground / Pistol×Normal×Ground / Grenade×Normal×Ground
   Rifle×Aiming×Ground / Unarmed×Normal×Jumping / Unarmed×Normal×Climbing
   └─ 非法组合（持枪攀爬、瞄准中跳跃…）没有状态类、没有转换边 → 天然不可达（无需规则表）
 
@@ -159,6 +164,7 @@ abstract class PlayerStateBase
 class PlayerContext   // 共享引用集合（状态类操作通道）：读共享信息 / 写运动状态 / 调用与改写组件
 {
     Animator / CharacterController / Transform / Camera / 四肢 IK 约束;
+    PlayerAnimatorParams AnimParams;    // Animator 参数值缓存写入器（同值跳过 Set*）
     PlayerInputState Input;                 // 帧快照（只消费）
     PlayerMotion Motion;                    // 共享运动描述（状态类写入，新状态 Enter 读取）
     PlayerBodyPosture Body;                 // 当前状态描述（有意只读；修改唯一通道 = 机器裁决）
@@ -208,7 +214,7 @@ machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBod
 |---|---|
 | 持枪不能攀爬/跳跃 | 状态枚举无 Rifle×Climbing/Jumping 组合；工厂无映射；无对应边 |
 | 非步枪不能瞄准 | 仅有一条 `(Rifle, Normal, Ground) → (Rifle, Aiming, Ground)` 瞄准入边 |
-| 剑可跑、枪不可跑 | `Sword_Normal_Ground_State` 实现奔跑档 / `Rifle_Normal_Ground_State` 不响应 Run 键（状态类内，各自负责） |
+| 手枪可跑、步枪不可跑 | `Pistol_Normal_Ground_State` 实现奔跑档 / `Rifle_Normal_Ground_State` 不响应 Run 键（状态类内，各自负责） |
 | 瞄准中不能切枪/跳跃 | `Rifle_Aiming_Ground` 无对应出边 |
 
 > 早期正交方案中的"能力许可表"（PlayerCapabilities）已随扁平化退役：它曾是轴间约束的唯一来源，但"状态/边存在性"已更直接地编码同一约束，保留反而造成"状态集合/边集合/能力表"三处信息需同步、易漂移。若未来需要面向 UI 的"当前不能做什么"提示，可从边/状态清单派生（或届时建立武器配置数据），届时再引入。
@@ -228,27 +234,57 @@ machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBod
 
 插入 `TopOut`：BodyPosture 加枚举行 + 新增状态类 + 工厂加一行映射 + 注册 `((Unarmed, Normal, Climbing) → (Unarmed, Normal, TopOut))` 与 `((Unarmed, Normal, TopOut) → (Unarmed, Normal, Ground))` 边 + Climbing 状态类到顶处一行 `RequestTransition`。其余状态零改动。
 
+### 6.7 地面/滞空复用提炼计划（规划中——Pistol 与 Grenade 完成后统一处理）
+
+**动机**：`Unarmed/Rifle × Normal × Ground/Jumping` 目前是"同一套地面/滞空逻辑 + 武器差异"的
+复制实现：武器切换速度插值、落地过渡、转向、WriteAnimatorParams 在 Unarmed 与 Rifle 各存一份；
+滞空（惯性 + 手写重力 + 落地判定）两把武器几乎逐行相同。直接新增 Pistol/Grenade 会把同样代码
+再复制两遍。因此在 Pistol/Grenade 落地【之后】统一做一次提炼，避免先抽象、后实现时两处返工。
+
+**目标结构（保持"一个组合 = 一个状态类 + 工厂映射"不变）**：
+
+1. `GroundStateBase`（States/ 下）：收走两份地面状态共有的状态字段与流程——落地过渡
+   （landingFallBlend/landingBlendTimer/active）、武器切换速度插值（weaponSwitchBlend*）、
+   旋转（RotateTowardMoveDirection）、常规 WriteAnimatorParams；差异点向下暴露：
+   - 速度档位：数值层提供按 Handing 的档位查询（走/跑目标速度 + 是否可跑），或子类覆写
+     `WalkSpeed/RunSpeed/CanRun`（Pistol 可跑、Grenade 不可跑、Unarmed/Rifle 各档位不变）；
+   - 目标组合：请求边/信号边仍由机器注册，状态类自身不持有切换表。
+2. `NormalJumpingStateBase`：收走滞空惯性/重力/落地判定/WriteAnimatorParams；
+   具体子类（Unarmed/Rifle/Pistol）只提供"落回哪个 Handing 组合"。
+3. `RotateTowardMoveDirection` 与常规参数写入若已收进基类，具体状态类只剩差异声明，
+   单文件理解成本下降；地面/滞空类预期均可降到 100~150 行内。
+
+**边界（不进入模板）**：Aiming（2D 轴速度/轴点旋转/双手 ChainIK）、Climbing/TopOut（走廊状态），
+保持各自独立；拔/收枪切换的 target 轨迹协调继续留在主体类。
+
+**约束与验收**：只做机械上提，不改变行为；完成后 Unarmed/Rifle 跑、跳、落地、切换速度插值
+回归一致（对照现行为）；Grenade/Pistol 接入时不再复制移动逻辑，仅声明差异。
+
 ## 7. 文件组织
 
 ```
 Assets/playercontroller/
-├── PlayerControllerScript.cs   主体层（输入桥接·状态机集成·状态与转换边注册）    [已实现-骨架]
+├── PlayerControllerScript.cs   主体层（输入桥接·状态机集成·状态与转换边注册·Gizmos 调试区）[已实现]
 ├── PlayerInputState.cs         输入层 + InputActionBridge                [已实现]
+├── PlayerAnimatorParams.cs     Animator 参数值缓存写入器（同值跳过 Set*）   [已实现]
 ├── PlayerStateMachine.cs       扁平单机状态机：PlayerStateKey 组合键 + 状态字典 + 转换边表 [已实现]
 ├── PlayerContext.cs            状态上下文（共享引用集合）                    [已实现]
 ├── PlayerMotion.cs             共享运动描述（跨状态交接槽，纯数据）          [已实现]
-├── PlayerMotionValues.cs       运动数值（物理常量 + 纯计算函数，Inspector 可调）[已实现]
+├── PlayerMotionValuesSO.cs     运动数值资产（物理常量 + 纯计算函数；资产级单例）[已实现]
+├── Editor/PlayerMotionValuesSOEditor.cs   SO 分组折叠 Inspector          [已实现]
 ├── States/  （一个状态 = 一个完整组合类）
 │   ├── PlayerStateBase.cs              [已实现]
-│   ├── Unarmed_Normal_Ground_State.cs  [已实现-骨架]
-│   ├── Rifle_Normal_Ground_State.cs    [已实现-骨架]
-│   ├── Sword_Normal_Ground_State.cs    [已实现-骨架]
+│   ├── Unarmed_Normal_Ground_State.cs  [已实现]
+│   ├── Rifle_Normal_Ground_State.cs    [已实现]
+│   ├── Pistol_Normal_Ground_State.cs   [已实现-骨架]
 │   ├── Grenade_Normal_Ground_State.cs  [已实现-骨架]
-│   ├── Rifle_Aiming_Ground_State.cs    [已实现-骨架]
-│   ├── Unarmed_Normal_Jumping_State.cs [已实现-骨架]
-│   ├── Unarmed_Normal_Climbing_State.cs [已实现-骨架]
-│   └── (走廊状态类，按需新增)
+│   ├── Rifle_Aiming_Ground_State.cs    [已实现]
+│   ├── Rifle_Normal_Jumping_State.cs   [已实现]
+│   ├── Unarmed_Normal_Jumping_State.cs [已实现]
+│   ├── Unarmed_Normal_Climbing_State.cs [已实现]
+│   └── Unarmed_Normal_ClimbTopOut_State.cs [已实现·走廊状态]
 ├── WallProbe.cs                墙面探测工具（自 test.cs 平移，零依赖）
+├── GroundProbe.cs              着地去抖探测工具（替代 CharacterController.isGrounded）
 └── （动画参数哈希）            集中于 PlayerControllerScript 顶部静态常量（Anim*）
 ```
 
@@ -273,7 +309,7 @@ Assets/playercontroller/
 |---|---|---|
 | Phase 0 | 设计文档 | 完成 |
 | Phase 1 | 输入层解耦（PlayerInputState + 桥接 + test.cs 改名） | 完成 |
-| Phase 2 | 数值层落地（PlayerMotionValues + PlayerMotion 交接槽） | 完成 |
+| Phase 2 | 数值层落地（PlayerMotionValuesSO + PlayerMotion 交接槽 + PlayerAnimatorParams 缓存写入） | 完成 |
 | Phase 3 | 状态机（扁平单机：组合状态枚举 + 单字典单边表 + 三种转换边） | **架构已完成**：7 个合法组合状态类骨架、边注册清单、非法组合天然不可达；状态内运动逻辑待做 |
 | Phase 4 | 主体类重组、回调桥接、场景接入 | 输入桥接已完成；场景接入待 Unity 侧 |
 | Phase 5 | 回归验证（对照 test.cs 行为） | 待 Phase 3/4 |
@@ -283,4 +319,5 @@ Assets/playercontroller/
 1. 走廊状态（登顶/翻越）：暂缓——`IsTransient` 预留缺口已随死代码清理移除；实现时新增走廊状态类 + 基类标记
 2. 切回空手的按键（如 0 键收枪）：inputactions 现无对应 action，装备互切边暂不含回空手路径
 3. `Look` 输入与相机模块的归属（本控制器只管透传？）
-4. ~~状态内运动逻辑（Phase 2 MotionState 接入）的优先级~~ —— 已完成：速度/旋转/重力已落地（各状态类 + PlayerMotionValues）
+4. ~~状态内运动逻辑（Phase 2 数值层接入）的优先级~~ —— 已完成：速度/旋转/重力已落地（各状态类 + PlayerMotionValuesSO）
+5. 地面/滞空复用提炼（`GroundStateBase` / `NormalJumpingStateBase`）：Pistol 与 Grenade 完成后统一处理，见 §6.7
