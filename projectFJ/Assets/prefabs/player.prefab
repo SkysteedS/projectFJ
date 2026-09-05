@@ -91,6 +91,8 @@ Transform:
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
+  - {fileID: 4544986702786931607}
+  - {fileID: 5238563348242291882}
   - {fileID: 8501981867292569227}
   - {fileID: 5128917343772563655}
   - {fileID: 1834162111610909841}
@@ -2079,7 +2081,7 @@ GameObject:
   m_Component:
   - component: {fileID: 6837227655491848454}
   m_Layer: 6
-  m_Name: rifle right hand target
+  m_Name: right hand target
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -2093,13 +2095,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 730497948981781871}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.87324524, y: -0.45791015, z: -0.15923223, w: -0.049053542}
-  m_LocalPosition: {x: 0.25167036, y: 0.3124482, z: -0.04214394}
+  m_LocalRotation: {x: -0.3502205, y: 0.24598047, z: -0.5749667, w: -0.6973181}
+  m_LocalPosition: {x: 0.18, y: 0.092, z: 0.707}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 7740345558742823494}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: -230.47, y: 185.38, z: 261.551}
 --- !u!1 &775085501439162379
 GameObject:
   m_ObjectHideFlags: 0
@@ -3604,7 +3606,7 @@ MonoBehaviour:
   m_Weight: 0
   m_Data:
     m_Root: {fileID: 7244731625199066100}
-    m_Mid: {fileID: 550999295417538882}
+    m_Mid: {fileID: 1021960589400443255}
     m_Tip: {fileID: 550999295417538882}
     m_Target: {fileID: 6837227655491848454}
     m_Hint: {fileID: 0}
@@ -7214,7 +7216,6 @@ Transform:
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
-  - {fileID: 5221156353755948832}
   - {fileID: 5655151959040901366}
   - {fileID: 5384134352673780729}
   - {fileID: 4262541110902965239}
@@ -7226,8 +7227,7 @@ Transform:
   - {fileID: 2778419643251419651}
   - {fileID: 4171452022055949920}
   - {fileID: 6837227655491848454}
-  - {fileID: 5238563348242291882}
-  - {fileID: 4544986702786931607}
+  - {fileID: 5221156353755948832}
   - {fileID: 7312958089078793737}
   m_Father: {fileID: 1834162111610909841}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
@@ -7928,7 +7928,7 @@ Transform:
   m_GameObject: {fileID: 5405408171032077353}
   serializedVersion: 2
   m_LocalRotation: {x: -0.62138104, y: -0.06855774, z: -0.7038963, w: 0.3372174}
-  m_LocalPosition: {x: 0.11, y: 0.291, z: -0.154}
+  m_LocalPosition: {x: 0.156, y: 0.332, z: -0.14}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -9502,12 +9502,12 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 6764305622396352209}
   serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -0.093, y: -0.897, z: -0.119}
+  m_LocalRotation: {x: -0.15986256, y: 1.2321199e-23, z: 1.2321193e-23, w: 0.9871393}
+  m_LocalPosition: {x: -0.093, y: -0.7069466, z: 0.18282819}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
-  m_Father: {fileID: 7740345558742823494}
+  m_Father: {fileID: 1125496159559296214}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &6793316447668849334
 GameObject:
@@ -12691,7 +12691,7 @@ GameObject:
   - component: {fileID: 70259448886158422}
   - component: {fileID: 2817204992653041616}
   m_Layer: 6
-  m_Name: firefly
+  m_Name: player
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -13290,47 +13290,7 @@ MonoBehaviour:
     frameAim: 0
     frameFireHeld: 0
     frameSignals: 0
-  motionValues:
-    rifleWalkSpeed: 1.5
-    rifleRunSpeed: 3.5
-    unarmedWalkSpeed: 2
-    unarmedRunSpeed: 4
-    moveAcceleration: 9
-    aimAcceleration: 8
-    rotateSpeed: 500
-    aimRotateSmoothTime: 0.12
-    aimRotateMaxSpeed: 360
-    weaponSwitchSpeedBlendTime: 0.5
-    aimAlignTime: 0.35
-    aimAlignSmoothTime: 0.05
-    gravity: -15
-    jumpHeight: 1
-    groundStickSpeed: -2
-    landingBlendTime: 0.25
-    airborneFallThreshold: -2.5
-    airborneRiseThreshold: 2
-    landingVerticalThreshold: 0
-    minMoveSqrMagnitude: 0.0001
-    aimRayDistance: 100
-    aimMissPointDistance: 100
-    aimRayMask:
-      serializedVersion: 2
-      m_Bits: 63
-    aimAxisMaxRotSpeed: 720
-    aimAxisNegZ: 1
-    aimHandCaptureTime: 0.5
-    aimHandRelockBlendTime: 0.15
-    aimToggleMode: 1
-    aimRigTransitionTime: 0.35
-    nonAimLateralSpeed: 0
-    gunLeftHandAnchorLocalPosition: {x: 0.089, y: 0.049, z: -0.2486}
-    gunLeftHandAnchorLocalEuler: {x: 63.164, y: -10.148, z: 112.995}
-    climbSpeed: 1
-    climbApproachAngle: 60
-    climbApproachMinSpeed: 1
-    climbExitMissFrames: 3
-    climbWallHugDistance: 0.3
-    climbWallHugSpeed: 8
+  motionValues: {fileID: 11400000, guid: 880000548d315f843a65f1715590ed57, type: 2}
   groundProbe:
     groundLayer:
       serializedVersion: 2
@@ -14012,8 +13972,8 @@ MonoBehaviour:
         transform: {fileID: 0}
         weight: 0
     m_Offset: {x: 0, y: 0, z: 0}
-    m_MinLimit: -30
-    m_MaxLimit: 30
+    m_MinLimit: -60
+    m_MaxLimit: 60
     m_AimAxis: 4
     m_UpAxis: 2
     m_WorldUpType: 1
@@ -15447,12 +15407,12 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 8584821380258041997}
   serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0.102, y: -0.897, z: -0.119}
+  m_LocalRotation: {x: -0.15986256, y: 1.2321199e-23, z: 1.2321193e-23, w: 0.9871393}
+  m_LocalPosition: {x: 0.102000006, y: -0.7069466, z: 0.18282819}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
-  m_Father: {fileID: 7740345558742823494}
+  m_Father: {fileID: 1125496159559296214}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &8590939398423419293
 GameObject:

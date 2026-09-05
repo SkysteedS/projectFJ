@@ -2,18 +2,20 @@ using UnityEngine;
 
 /// <summary>
 /// 具体状态：空手（Unarmed）× 正常手部（Normal）× 滞空（Jumping）。
-/// 滞空逻辑参照 test.cs（UpdateVerticalVelocity 滞空分支 + OnAnimatorMove 滞空分支）：
+/// 滞空逻辑参照 早期原型（UpdateVerticalVelocity 滞空分支 + OnAnimatorMove 滞空分支）：
 /// - 水平：起跳瞬间【捕获】上一状态（地面）写入的速度向量作为跳跃移动速度——
 ///   滞空期间方向与大小均保持不变（纯惯性，不做输入操控 / 加速度插值）：
 ///   立定跳继承 0 → 纯向上；行走跳继承当前行走/奔跑速度 → 带前冲；
 /// - 垂直：手写重力累积；起跳初速度在 Enter 反推 v = √(2·|g|·h)；
 /// - 落地：垂直速度 ≤ 落地判定阈值且物理着地时【提议】回地面（请求边裁决；≤ 阈值防起跳瞬间误判）；
+/// - 空中抓墙：滞空期由持久边每帧检测可攀爬墙面（墙面命中 + 水平速度朝墙，上升/下降均可），
+///   命中即切攀爬（见 PlayerControllerScript）——不再只在地面按 Jump 的起跳瞬间检测；
 /// - 位移：OnAnimatorMove 全量接管——跳跃动画没有水平根运动，水平位移由脚本按继承速度接管
-///   （test.cs 同款），垂直由手写重力接管；
+///   （早期原型 同款），垂直由手写重力接管；
 /// - 动画参数：body posture = 1；vertical/horizontal speed = 水平面内前后/左右分量（非瞄准：全速前后、左右 0）；
 ///   falling speed = 垂直方向速度（原始 m/s，正值向上 / 负值向下，越界由混合树钳制）。
 ///
-/// 数值约定：所有可调参数集中在 PlayerMotionValues（Inspector 可调）；
+/// 数值约定：所有可调参数集中在 PlayerMotionValuesSO（Inspector 可调）；
 /// 状态内结构常量集中定义在本类顶部——禁止散落无说明的字面值。
 /// </summary>
 public class Unarmed_Normal_Jumping_State : PlayerStateBase

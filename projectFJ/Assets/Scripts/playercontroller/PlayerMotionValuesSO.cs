@@ -1,16 +1,24 @@
 using UnityEngine;
 
 /// <summary>
-/// 运动数值服务（设计文档 §5 数值层的"数值"部分）：物理常量 + 纯计算函数。
-/// 只负责"算数"——速度插值 / 重力累积 / 跳跃初速反推，
-/// 不含姿态判定与切换决策（那是状态类与转换边的职责）。
+/// 运动数值服务（设计文档 §5 数值层的"数值"部分）——ScriptableObject 资产版。
 ///
-/// 默认数值与 test.cs 的 MotionState（可行性原型）保持一致，保证行为回归；
-/// [SerializeField] 便于在 Inspector 调试调参（字段均带 [Tooltip]，悬停可看含义）。
-/// 状态类经 PlayerContext.Values 访问；计算结果写回 PlayerContext.Motion（跨状态交接槽）。
+/// 背景：早期版本把数值放在 MonoBehaviour 内嵌的 [Serializable] 类（PlayerMotionValues）里，
+/// Play Mode 中改 Inspector 会因组件重新序列化而失效（旧引用读到旧值）。按项目规范
+/// （AGENTS.md 工作约定：数值管理优先考虑 ScriptableObject），数值改为资产级单例承载：
+/// 场景/prefab 组件只持引用，修改资产即全局生效、且支持 Play Mode 实时调参。
+///
+/// 约定：
+/// 1. 字段【直接摊在本类顶层】，不要再用 [Serializable] 子类包一层——否则 SO 资产被
+///    Inspector 重新序列化时，内嵌子类实例仍会被替换，代码缓存其引用会重蹈覆辙。
+///    唯一例外是叶级只读数据 SwitchIkWindow（拔/收枪时间窗），定义在同文件底部、
+///    以内嵌实例序列化进本资产；消费侧每次经 Values 现取，不得长期缓存其引用。
+/// 2. 本文件是运动数值的唯一定义来源（旧内嵌类已删除，资产数据不依赖任何旧文件）。
+/// 3. 只负责"算数"——速度插值 / 重力累积 / 跳跃初速反推，不含姿态判定与切换决策。
+///    状态类经 PlayerContext.Values 访问；计算结果写回 PlayerContext.Motion。
 /// </summary>
-[System.Serializable]
-public class PlayerMotionValues
+[CreateAssetMenu(fileName = "PlayerMotionValues", menuName = "Player/Motion Values")]
+public class PlayerMotionValuesSO : ScriptableObject
 {
     [Header("速度档位（目标 = 档位 × 输入模长）")]
     [Tooltip("步枪（持枪）行走速度（m/s）：非瞄准步枪地面状态的目标档位")]
@@ -152,9 +160,58 @@ public class PlayerMotionValues
     [Tooltip("贴墙收敛速度（每秒收敛比例）")]
     public float climbWallHugSpeed = 8f;
 
-    [Header("攀爬手部 IK（程序化：跟随头部的水平线 + 中线对称姿态；只移动 TwoBoneIK target，权重由动画状态机管理）")]
+    [Tooltip("向下爬至可着陆的自动退出帧数：持续按“下”（S）且 GroundProbe 去抖确认着地（ctx.IsGrounded）连续达到该帧数后，自动退出攀爬回 Normal 地面姿态（0 或负值 = 关闭该自动退出）")]
+    public int climbDownExitFrames = 3;
+
+    [Tooltip("攀爬中墙面复测的“缺失射线比例”退出阈值：墙面网格全部射线发射统计，缺失比例 ≥ 该值（默认 0.5 = 缺失一半）且连续 climbExitMissFrames 帧才视为脱墙退出——容忍头顶射线越过墙顶，避免与登顶检测冲突导致无法登顶")]
+    public float climbWallExitMissRatio = 0.5f;
+
+    [Header("攀爬手脚共用节奏（双手双脚的步进交替与切换平滑统一用这两个参数）")]
+    [Tooltip("姿态切换时间（s）：双手双脚共用的姿态切换平滑时长（上下换手/换脚、收开互换、横向挪脚等）")]
+    public float climbSwitchTime = 0.4f;
+
+    [Tooltip("步进交替间隔（s）：持续同方向攀爬时双手双脚共用的姿态交替节奏间隔")]
+    public float climbStepInterval = 0.6f;
+
+    [Header("攀爬头部 IK（head Multi-Aim：方向 = 移动方向；无输入保持上一角度）")]
+    [Tooltip("攀爬时头部最大偏转角（°）：由“看墙面”正向向“移动方向”（墙上上下/左右）转动，方向跟随移动方向、偏转量以该角度为上限；0 = 始终看墙。建议 20~60，Play 中实时标定")]
+    public float climbHeadLookAngle = 45f;
+
+    [Header("攀爬脚部 IK（上下：与手同拍反相；左右：双脚同相开合，均停在基准线不上不下）")]
+    [Tooltip("脚部基准线相对臀部骨骼的高度（沿墙面上轴；默认在臀部下方 0.25m，正值=更高、负值=更低）")]
+    public float climbFootLineHeight = -0.25f;
+
+    [Tooltip("脚部中线距离（m）：双脚相对身体中心竖线的横向距离（上下攀爬与进入时的基准横向间隔）")]
+    public float climbFootCenterDist = 0.1f;
+
+    [Tooltip("脚部交替幅度（m）：上下攀爬时双脚相对基准线的上下幅度（与手同拍反相：同一侧手在上则脚在下）")]
+    public float climbFootAlternateLength = 0.13f;
+
+    [Tooltip("脚部收拢偏移（m）：左右攀爬“收拢”相位时脚与中线的横向距离（并拢但留出该偏移，不要完全贴中线）")]
+    public float climbFootClosedOffset = 0.06f;
+
+    [Tooltip("脚部开合幅度（m）：左右攀爬时在收拢偏移基础上叠加的开合量——打开 = 收拢偏移 + 开合幅度、收拢 = 收拢偏移（与手同拍，双脚不上不下）")]
+    public float climbFootOpenAmount = 0.06f;
+
+    [Tooltip("脚踝离墙偏移（m）：脚部 TwoBoneIK target 定位的是脚踝，脚踝不是脚掌/脚尖——target 若精确贴在墙面上会陷入墙内。该值 = 脚 target 投影到墙面后、再沿墙面法线向角色方向（远离墙面）偏移的距离。正值 = 脚踝离墙更远、脚掌贴墙；方向相反改负值")]
+    public float climbFootWallNormalOffset = 0f;
+
+    [Tooltip("左脚 target 相对墙面基准旋转的附加欧拉角（°），语义同手部偏移；上下交替与横向开合的脚尖角度都由它微调（先补 ±90/180 让脚掌朝向正确，再微调）")]
+    public Vector3 climbLeftFootRotationOffset = Vector3.zero;
+
+    [Tooltip("右脚 target 相对墙面基准旋转的附加欧拉角（°），语义同手部偏移；上下交替与横向开合的脚尖角度都由它微调")]
+    public Vector3 climbRightFootRotationOffset = Vector3.zero;
+
+    [Header("攀爬身体 IK（body Multi-Aim：方向 = 移动方向，角度比头小；无输入保持上一角度）")]
+    [Tooltip("攀爬时身体（Chest）最大偏转角（°）：由墙面正向向移动方向转动，上下左右都生效于目标方向；实际可见幅度取决于 body aim constraint 的约束轴（当前只开 Y 轴=左右，上下需另开 X 轴）")]
+    public float climbBodyLookAngle = 12f;
+
+    [Header("攀爬手部 IK（程序化：位置 = 头部水平线 + 中线对称姿态；旋转 = 墙面基准 + 左右手偏移；只写 TwoBoneIK target 的 TRS，权重由动画状态机管理）")]
     [Tooltip("水平线高度（m）：手部姿态的基准水平线相对头部骨骼的高度（沿墙面向上为正；该线每帧跟随头部）")]
     public float climbHandLineHeight = 0.1f;
+
+    [Tooltip("腕骨离墙偏移（m）：TwoBoneIK target 定位的是腕骨，腕骨不是掌心——腕到掌存在厚度，target 若精确贴在墙面上，掌心/手会陷入墙内。该值 = 手部 IK 目标位置投影到墙面后、再沿墙面法线向角色方向（远离墙面）偏移的距离：让腕骨退到掌心后方、掌心正好贴墙。正值 = 目标离墙更远；若发现方向相反改负值。建议从 0.05 起步在 Play Mode 里实时标定")]
+    public float climbHandWallNormalOffset = 0f;
 
     [Tooltip("中线距离（m）：左右手相对中线（身体在墙面上投影的中心竖线）的横向距离；上下攀爬时双手持该距离不动")]
     public float climbHandCenterDist = 0.25f;
@@ -168,20 +225,72 @@ public class PlayerMotionValues
     [Tooltip("开合幅度（m）：左右攀爬时双手横向收拢/打开的摆动幅度：收拢 = 中线距离 − 开合幅度，打开 = 中线距离 + 开合幅度（双手幅度一致）")]
     public float climbHandOpenAmount = 0.12f;
 
-    [Tooltip("姿态切换时间（s）：手部姿态（上下换手 / 收开互换）切换的平滑过渡时长")]
-    public float climbHandSwitchTime = 0.4f;
+    [Tooltip("是否每帧写入攀爬手部 target 的 rotation。关 = 只写位置、保持 target 进入攀爬前的旋转（与动画手部姿态对照调试用；正常攀爬请保持开）")]
+    public bool climbHandWriteRotation = true;
 
-    [Tooltip("步进交替间隔（s）：持续同方向攀爬时手臂姿态交替（上下换手 / 收开互换）的间隔")]
-    public float climbHandStepInterval = 0.6f;
+    [Tooltip("左手 target 相对「墙面基准旋转」的附加欧拉角（°）。墙面基准旋转 = 角色贴墙朝向：target 的 +Z 指向墙面（角色面墙前方）、+Y 沿墙面上、+X 沿墙面横向；偏移按 Unity 欧拉顺序叠加在基准系上，x/y/z 直觉上分别对应 横向倾侧 / 指尖俯仰 / 掌心翻转。全 0 时 target 自身轴即墙面基准轴；若模型手骨轴约定与基准不一致，先补 ±90/180 的初值再微调（Scene 视图以 target 三色轴为参照）")]
+    public Vector3 climbLeftHandRotationOffset = Vector3.zero;
 
-    [Tooltip("最大臂展（m）：手部目标相对基准点（头部骨骼 + 水平线偏移）在墙面平面内的最大偏移；超限被钳制以保证双臂可达")]
-    public float climbHandMaxReach = 0.35f;
+    [Tooltip("右手 target 相对「墙面基准旋转」的附加欧拉角（°），语义同左手参数。左右手相互独立（通常镜像：调准一侧后另一侧可先试对应分量反号）；Scene 视图以 target 三色轴为参照")]
+    public Vector3 climbRightHandRotationOffset = Vector3.zero;
 
-    [Tooltip("攀爬 IK 调试可视化（Scene 视图）：青色 = IK 目标，黄色 = 实际手骨（腕），红色 = 目标到手骨的连线（线越长 = IK 越没拉到位）")]
-    public bool climbIkDebugGizmos = true;
+    [Header("登顶（ClimbTopOut：手部到顶探测 + 悬挂手 MatchTarget 固定）")]
+    [Tooltip("开启攀爬自动到顶探测：从较高手的手腕上方射向墙面，连续 topOutProbeMissFrames 帧射不到墙（已越过墙顶）即请求进入登顶动画；关闭后需另走手动触发（当前无其他入口）")]
+    public bool topOutAutoTrigger = true;
 
-    [Tooltip("退出攀爬时把手/头 IK 权重参数归零（脚本侧兜底）：动画层 climbing 退出后无状态驱动这些参数（层回 DoNothing 无曲线），参数会滞留 1 导致退攀后双手被钉在旧目标上；开启后由状态 Exit 写 0。若后续动画层补上权重曲线可关闭")]
-    public bool climbResetIkWeightsOnExit = true;
+    [Tooltip("探测射线起点相对手部 IK target（手掌/腕目标）的向上偏移（m）：射线从“手掌上方该高度”射出，检测该高度是否仍有墙面（仍命中=还可继续爬，未命中=已越过墙顶可登顶）")]
+    public float topOutProbeUpOffset = 0.15f;
+
+    [Tooltip("探测射线起点相对手部 IK target 的离墙偏差（m，正值 = 沿墙面法线向角色方向拉开起点）：IK target 通常已贴墙，起点若不外拉就可能处于墙碰撞体内部——Unity Raycast 从碰撞体内部发射不会命中该碰撞体，导致正常爬墙也被误判“到顶”。该值保证起点在墙外，射线从墙外射向墙面")]
+    public float topOutProbePalmOffset = 0.05f;
+
+    [Tooltip("探测射线长度（m）：从起点沿墙面方向的最大距离；需大于“起点到墙面”的间隙，也决定“越过墙顶后仍把墙后物体误判为墙”的范围")]
+    public float topOutProbeRayLength = 0.3f;
+
+    [Tooltip("探测连续未命中的帧数（去抖）：射线连续该帧数未射到墙面才视为到顶；1 = 单帧即触发")]
+    public int topOutProbeMissFrames = 3;
+
+    [Tooltip("登顶 MatchTarget 的开始时间（normalizedTime，0~1）：匹配混合从该进度开始，到 topOutMatchEndNormalizedTime 完成落位；默认 0 = 动画开播即开始混合（若发现 crossfade 帧下达异常可调到 0.06~0.07 避开过渡）")]
+    public float topOutMatchStartNormalizedTime = 0f;
+
+    [Tooltip("登顶 MatchTarget 的落位时间（normalizedTime，0~1）：动画播放到该进度时被抓手精确匹配到目标点；默认 0.1 = 动画 10% 处落位（后续 HandGrabEdgeEnd 事件只负责解除固定，不再锁手）")]
+    public float topOutMatchEndNormalizedTime = 0.1f;
+
+    [Tooltip("登顶 MatchTarget 的位置匹配权重（X/Y/Z）：1 = 该轴向完全把被抓手拉向进入时快照位，0 = 该轴向仍由动画根运动控制")]
+    public Vector3 topOutMatchPositionWeight = Vector3.one;
+
+    [Tooltip("MatchTarget 目标点的可调位置偏移（m，在墙顶扫描抓取点基础上叠加，Play Mode 实时调参）：X = 角色右轴（沿墙横向），Y = 世界向上，Z = 角色前向（指向墙面）；例如手看起来偏低就加 Y，偏前/偏后调 Z")]
+    public Vector3 topOutMatchPositionOffset = Vector3.zero;
+
+    [Tooltip("登顶 MatchTarget 的旋转匹配权重（0~1）：1 = 被抓手的旋转也对齐进入时快照（攀爬 IK 手型≈贴墙朝前，与悬挂抓缘手型常差约 90°，默认 0 让动画自己转手）；若发现手型/穿模问题再按需调高并配合 IK 优化")]
+    public float topOutMatchRotationWeight = 0f;
+
+    [Tooltip("开启后登顶抓取点 = 进入登顶瞬间“垂直向下每 topOutGrabScanStep 米扫描”命中的墙顶面位置（不再用 IK target 快照，IK target 贴墙面而不是墙顶缘，抓取点偏下）；关闭则回退旧逻辑（IK target 位置快照）")]
+    public bool topOutGrabUseLedgeScan = true;
+
+    [Tooltip("垂直向下扫描的采样间隔（m）：用户约定 1cm = 0.01")]
+    public float topOutGrabScanStep = 0.01f;
+
+    [Tooltip("扫描起点相对被抓取手骨的向上高度（m）：从该高度开始逐厘米向下扫；需高于墙顶边缘，让第一次命中出现在墙顶面上")]
+    public float topOutGrabScanStartAbove = 0.5f;
+
+    [Tooltip("垂直向下扫描的最大采样步数（每步 topOutGrabScanStep 米）：默认 120 步 = 1.2m 向下覆盖")]
+    public int topOutGrabScanSteps = 120;
+
+    [Tooltip("扫描垂线相对手骨沿角色前向（朝墙内）的偏移（m）：垂线必须落在墙顶面的正上方才能命中顶面——从墙面外侧垂直向下永远打不到竖直墙面；该值需大于“手掌到墙前表面”的间隙、且小于墙体厚度，否则会越过墙顶打到墙后地面")]
+    public float topOutGrabScanForward = 0.15f;
+
+    [Tooltip("抓取点相对墙顶命中点的上抬（m）：MatchTarget 对齐的是腕骨，抓握时腕骨高于顶面约一个掌心厚度；0 = 腕骨正好落在顶面（手会半穿入顶面）")]
+    public float topOutGrabPointUpOffset = 0.05f;
+
+    [Tooltip("扫描命中点高度校验上限（m）：命中点高于被抓取手骨超过该值即视为打到了错误表面（如更高处的其它平台），改用旧逻辑兜底；避免误抓")]
+    public float topOutGrabMaxLedgeHeight = 0.5f;
+
+    [Tooltip("登顶动画播到该 normalizedTime 即退出回 Unarmed Normal Ground（默认 0.9：提前离开末段站稳收尾，把最后姿态过渡交给地面状态/动画 crossfade，避免播满后在地面状态上短暂冻结）")]
+    public float topOutExitNormalizedTime = 0.9f;
+
+    [Tooltip("登顶 MatchTarget 调试日志：下达时打印目标/窗口，HandGrabEdgeEnd 事件触发时打印 isMatchingTarget（排查“匹配是否被引擎接受、是否窗口太短”）")]
+    public bool topOutDebugLog = false;
 
     /// <summary>起跳初速度：由跳跃高度与重力反推 v = √(2·|g|·h)。</summary>
     public float JumpSpeed => Mathf.Sqrt(2f * Mathf.Abs(gravity) * jumpHeight);

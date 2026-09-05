@@ -9,7 +9,7 @@ using UnityEngine;
 ///   切换顺序由 PlayerStateMachine 保证"旧.Exit → 新.Enter"串行化；
 /// - Tick：本状态内的运动与操作管理（读输入 → 计算 → 写动画参数/发起提议）；
 /// - OnAnimatorMove：本状态的位移接管策略（根运动 / 脚本接管），由主体类委托。
-///   各具体状态类已实现完整运动逻辑（速度平滑/转向/重力），数值参数见 PlayerMotionValues。
+///   各具体状态类已实现完整运动逻辑（速度平滑/转向/重力），数值参数见 PlayerMotionValuesSO。
 ///
 /// 共享原则：PlayerContext 是角色各系统的共享引用集合（状态类的操作通道）——状态类经它
 /// 读共享信息、写运动状态、调用/改写组件（位移/旋转/IK target/动画参数）；
@@ -21,6 +21,12 @@ public abstract class PlayerStateBase
     public virtual void Enter(PlayerContext ctx) { }
 
     public virtual void Exit(PlayerContext ctx) { }
+
+    /// <summary>
+    /// 动画事件回调（由主体类的 Animation Event 入口经 PlayerStateMachine 转发到当前状态；默认忽略，状态按需覆写）。
+    /// 用途示例：登顶状态收到 HandGrabEdgeEnd（climb to end.anim 悬挂结束）即中断 MatchTarget 放手。
+    /// </summary>
+    public virtual void OnAnimEvent(PlayerContext ctx, string message) { }
 
     /// <summary>本状态每帧逻辑：读输入 → 运动/操作管理 → 必要时请求转换。</summary>
     public abstract void Tick(PlayerContext ctx);

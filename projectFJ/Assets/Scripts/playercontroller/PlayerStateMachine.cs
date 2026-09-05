@@ -159,6 +159,12 @@ public class PlayerStateMachine
         EvaluatePersistentEdges();
         currentState?.Tick(ctx);
     }
+
+    /// <summary>
+    /// 动画事件分发：主体类（Animator 所在对象）收到 Animation Event 后调用，
+    /// 转发给当前状态实例（无状态或未覆写时忽略）。
+    /// </summary>
+    public void NotifyAnimEvent(string message) => currentState?.OnAnimEvent(ctx, message);
     #endregion
 
     #region 转换裁决（唯一执行点）

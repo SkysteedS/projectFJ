@@ -2,19 +2,19 @@ using UnityEngine;
 
 /// <summary>
 /// 具体状态：步枪（Rifle）× 正常手部（Normal）× 着地（Ground）。
-/// 移动方式与 test.cs 完全一致（与空手地面状态同款，仅装备不同）：
+/// 移动方式与 早期原型 完全一致（与空手地面状态同款，仅装备不同）：
 /// - 旋转：WASD → 相机轴世界朝向，RotateTowards 插值转向（无输入不转向）；
 /// - 水平速度：目标 = 步枪（持枪）档位（走 1.5 / 跑 3.5 × 输入模长），常态 MoveTowards 恒加速度插值；
 ///   武器切换（空手↔持枪）后按 Switching Weapon 动画进度做旧→新档位插值（检测不到动画时兜底 weaponSwitchSpeedBlendTime）；
 /// - 垂直：着地保持向下压速度；离地（走下边沿）累积重力，越过死区阈值时【提议】切滞空（请求边裁决）；
-/// - 位移：OnAnimatorMove 沿用动画根运动水平分量 + 手写垂直分量（test.cs 同款）；
+/// - 位移：OnAnimatorMove 沿用动画根运动水平分量 + 手写垂直分量（早期原型 同款）；
 /// - 动画参数：本类只写水平/垂直速度分量；body posture / hand posture / player handing
 ///   由主体类按当前状态组合每帧同步（切换瞄准/跳跃即自动切换动画分支）。
 /// 瞄准进入由持久边驱动（按住右键），开局进本状态经 SlotRifle 信号边。
 /// </summary>
 public class Rifle_Normal_Ground_State : PlayerStateBase
 {
-    #region 状态内结构常量（语义见注释；可调参数见 PlayerMotionValues）
+    #region 状态内结构常量（语义见注释；可调参数见 PlayerMotionValuesSO）
     /// <summary>落地过渡计时归零值（计时结束判定）。</summary>
     static readonly float TimerExpired = 0f;
     /// <summary>无下落捕获时的 falling speed 分量（常态分量）。</summary>
@@ -244,7 +244,7 @@ public class Rifle_Normal_Ground_State : PlayerStateBase
 
     public override void OnAnimatorMove(PlayerContext ctx)
     {
-        // 地面：沿用动画根运动（水平）+ 手写垂直分量（test.cs 同款）；
+        // 地面：沿用动画根运动（水平）+ 手写垂直分量（早期原型 同款）；
         // 落地过渡期 landingFallBlend 只影响动画下落姿态参数，位移以贴地速度为准。
         Vector3 delta = ctx.Animator.deltaPosition;
         delta.y = ctx.Motion.VerticalVelocity * Time.deltaTime;
@@ -253,7 +253,7 @@ public class Rifle_Normal_Ground_State : PlayerStateBase
 
     void RotateTowardMoveDirection(PlayerContext ctx)
     {
-        // 无输入不改变朝向（test.cs 同款）
+        // 无输入不改变朝向（早期原型 同款）
         if (ctx.Input.Move.sqrMagnitude <= ctx.Values.minMoveSqrMagnitude) return;
 
         Vector3 moveDir = CameraSpaceMoveDir(ctx);

@@ -14,7 +14,7 @@ using UnityEngine.Animations.Rigging;
 /// 没有对应状态类与边，天然不可达）；状态内行为差异（如步枪不响应奔跑档）在
 /// 各具体状态类内部直接实现。
 ///
-/// 运动数值已接入（PlayerMotionValues，经 Values 访问；计算函数与可调参数字段见该类）；
+/// 运动数值已接入（PlayerMotionValuesSO 资产，经 Values 访问；计算函数与可调参数字段见该类）；
 /// 着地判定由主体类每帧经 GroundProbe 探测写入 IsGrounded（不使用 CharacterController.isGrounded，
 /// 该标志在台阶/边缘存在帧级抽搐，见 GroundProbe）。
 /// </summary>
@@ -79,11 +79,61 @@ public class PlayerContext
     /// <summary>共享运动描述（跨状态交接槽）：当前状态类写入速度、新状态 Enter 读取（见 PlayerMotion）。</summary>
     public readonly PlayerMotion Motion = new PlayerMotion();
 
-    /// <summary>运动数值服务（物理常量 + 纯计算函数，见 PlayerMotionValues）；状态类读常量、调计算、写 Motion。</summary>
-    public readonly PlayerMotionValues Values;
+    /// <summary>运动数值服务（物理常量 + 纯计算函数，见 PlayerMotionValuesSO；资产单例，状态类读常量、调计算、写 Motion）。</summary>
+    public readonly PlayerMotionValuesSO Values;
 
     /// <summary>墙面探测（参数化射线阵列，见 WallProbe）；攀爬进入检测与攀爬中逐帧重测共用。</summary>
     public readonly WallProbe WallProbe;
+
+    #region 攀爬手部 IK 调试（攀爬状态每帧写入；PlayerControllerScript.OnDrawGizmos 读取绘制）
+    /// <summary>攀爬手部 IK 调试数据是否有效（攀爬状态每帧写入；非攀爬恒 false）。是否显示由主体类 showClimbIkGizmos 开关决定。</summary>
+    public bool ClimbIkDebugActive;
+    /// <summary>左手 IK 目标位置（世界坐标）。</summary>
+    public Vector3 ClimbLeftTarget;
+    /// <summary>右手 IK 目标位置（世界坐标）。</summary>
+    public Vector3 ClimbRightTarget;
+    /// <summary>左手实际位置（TwoBoneIK tip / 手骨，世界坐标，调试对比用）。</summary>
+    public Vector3 ClimbLeftHandPos;
+    /// <summary>右手实际位置（TwoBoneIK tip / 手骨，世界坐标，调试对比用）。</summary>
+    public Vector3 ClimbRightHandPos;
+    #endregion
+
+    #region 登顶到顶探测调试（攀爬状态每帧写入；PlayerControllerScript.OnDrawGizmos 读取绘制）
+    /// <summary>到顶探测数据是否有效（本帧确实发射了探测射线；攀爬状态写入、进入登顶后恒 false）。是否显示由主体类 showClimbTopOutGizmos 开关决定。</summary>
+    public bool TopOutProbeActive;
+    /// <summary>最近一帧到顶探测选中的手掌锚点（TwoBoneIK target / 手骨，世界坐标；调试竖线用）。</summary>
+    public Vector3 TopOutProbeAnchor;
+    /// <summary>最近一帧到顶探测射线的起点（手骨上方 + 手掌方向偏差，世界坐标）。</summary>
+    public Vector3 TopOutProbeOrigin;
+    /// <summary>最近一帧到顶探测射线的可视终点：命中墙面侧面时 = 墙面命中点，未命中时 = 起点 + 墙面方向 × 射线长度。</summary>
+    public Vector3 TopOutProbeEnd;
+    /// <summary>最近一帧到顶探测是否命中墙面侧面（法线近水平；true = 仍在爬墙，false = 已越过墙顶、到顶候选）。</summary>
+    public bool TopOutProbeHitWall;
+
+    /// <summary>登顶抓取点调试数据是否有效（TopOut 状态 Enter 写入；退出登顶后恒 false）。是否显示由主体类 showClimbTopOutGizmos 开关决定。</summary>
+    public bool TopOutGrabPointValid;
+    /// <summary>最近一次登顶确定的抓取点（MatchTarget 目标位，世界坐标；品红球显示）。</summary>
+    public Vector3 TopOutGrabPoint;
+    /// <summary>墙顶扫描起点（世界坐标；与抓取点连线显示扫描方向）。</summary>
+    public Vector3 TopOutGrabScanOrigin;
+    /// <summary>抓取点是否来自墙顶扫描（true）；false = 扫描失败回退的 IK target 快照（橙球提示）。</summary>
+    public bool TopOutGrabUsedScan;
+    #endregion
+
+    /// <summary>
+    /// 攀爬自动退出请求标志（攀爬状态满足条件时置 true 并请求回 Normal 地面姿态；
+    /// “退出攀爬”请求边 ③c 的条件并入这两个标志；攀爬状态 Enter 负责清零）：
+    /// - ClimbDownReachedGround：持续向下输入 + GroundProbe 确认着地，连续达 Values.climbDownExitFrames 帧；
+    /// - ClimbWallLost：墙面覆盖式复测缺失 ≥ Values.climbWallExitMissRatio 的射线且连续 climbExitMissFrames 帧。
+    /// </summary>
+    public bool ClimbDownReachedGround;
+    public bool ClimbWallLost;
+
+    /// <summary>
+    /// 登顶时要固定的手掌（攀爬状态在到顶请求前写入，登顶状态 Enter 读取；true = 左手、false = 右手）。
+    /// 值语义 = 到顶探测选择的那只较高手（交替攀爬中更接近墙顶、动画悬挂时按在边缘上的手）。
+    /// </summary>
+    public bool TopOutGrabLeftHand;
 
     readonly PlayerStateMachine machine;
 
@@ -91,7 +141,7 @@ public class PlayerContext
                          Camera mainCamera, PlayerInputState input, PlayerStateMachine machine,
                          TwoBoneIKConstraint rightHandConstraint, TwoBoneIKConstraint leftHandConstraint,
                          TwoBoneIKConstraint rightLegConstraint, TwoBoneIKConstraint leftLegConstraint,
-                         PlayerMotionValues values = null, WallProbe wallProbe = null,
+                         PlayerMotionValuesSO values = null, WallProbe wallProbe = null,
                          MultiAimConstraint rifleAimConstraint = null, MultiAimConstraint headAimConstraint = null,
                          MultiAimConstraint bodyAimConstraint = null,
                          ChainIKConstraint rightArmChainConstraint = null, ChainIKConstraint leftArmChainConstraint = null,
@@ -110,7 +160,8 @@ public class PlayerContext
         LeftLegConstraint = leftLegConstraint;
         RightArmChainConstraint = rightArmChainConstraint;
         LeftArmChainConstraint = leftArmChainConstraint;
-        Values = values ?? new PlayerMotionValues();
+        // 未在 Inspector 指派资产时用运行时默认实例兜底（内存对象、不落盘不共享；正常应指派资产）
+        Values = values != null ? values : ScriptableObject.CreateInstance<PlayerMotionValuesSO>();
         WallProbe = wallProbe ?? new WallProbe();
         RifleAimConstraint = rifleAimConstraint;
         HeadAimConstraint = headAimConstraint;

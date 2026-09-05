@@ -38,6 +38,7 @@
 
 - 开发引擎：Unity 2022.3.62f3c1（URP）。
 - 沟通语言：与用户沟通默认使用中文。
+- **数值管理优先考虑 ScriptableObject**：在考虑进行数值管理（可调参数、配置数据、数值资产）时，必须优先思考是不是应该用 ScriptableObject 来存放数据，以实现数据的单例修改（一处修改全局生效、支持 Play Mode 实时调参），而不是把数值直接内嵌在 MonoBehaviour 的 [Serializable] 类里。理由：MonoBehaviour 内嵌按值序列化数据在 Play Mode 中修改 Inspector 时会因组件重新序列化而失效/产生旧引用；ScriptableObject 是资产级单例，场景组件只持有引用，天然规避该问题。
 
 ## 文档索引
 

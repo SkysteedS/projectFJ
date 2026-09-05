@@ -8,7 +8,7 @@ using UnityEngine;
 /// - 写入者：当前状态类（计算完毕即写入，保证切换后读取到的是最新值）；
 /// - 读取者：进入的新状态（Enter 中读取初值，如滞空继承起跳水平速度、
 ///   落地处理读取下落速度做姿态混合）；
-/// - 纯数据，不含计算：速度平滑/重力等计算在数值层（PlayerMotionValues），
+/// - 纯数据，不含计算：速度平滑/重力等计算在数值层（PlayerMotionValuesSO），
 ///   本类只存"结果描述"，由状态类经 PlayerContext.Values 调用计算函数后写入。
 /// </summary>
 public class PlayerMotion

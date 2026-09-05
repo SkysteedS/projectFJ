@@ -1,9 +1,13 @@
 using UnityEngine;
 
 /// <summary>
-/// 墙面探测（自 test.cs 平移并按新版需求参数化）：
+/// 墙面探测（自 早期原型 平移并按新版需求参数化）：
 /// 从角色根部向前方射出【参数化射线阵列】——列数 × 行数 × 行间距 × 列间距，全部命中，
-/// 且满足 竖直 / 面向 / 法线一致 判定才算可攀爬。法线拟合（命中点平均→归一化→朝向角色）与 test.cs 保持一致。
+/// 且满足 竖直 / 面向 / 法线一致 判定才算可攀爬。法线拟合（命中点平均→归一化→朝向角色）与 早期原型 保持一致。
+/// 两种模式：
+/// - Evaluate（严格，进入攀爬用）：任一射线未命中即失败（表面不连续），全部命中后才做几何校验；
+/// - EvaluateCoverage（覆盖式，攀爬中持续贴墙用）：全部射线都发射统计，允许部分缺失
+///   （如头顶射线越过墙顶），是否“缺失过半”由调用方按 Values.climbWallExitMissRatio 判定。
 /// 仅作探测工具：进入攀爬的裁决在状态机信号边（Jump + 速度朝墙），状态内每帧重测用于退出条件。
 /// </summary>
 [System.Serializable]
@@ -51,6 +55,7 @@ public class WallProbe
     readonly Vector3[] hitPoints = new Vector3[MaxRays];   // 各命中点（预分配）
     readonly Vector3[] hitNormals = new Vector3[MaxRays];  // 各命中点表面法线（预分配）
     int lastHitCount;      // 最近一次检测收集到的命中数
+    int lastTotalCount;    // 最近一次检测的总射线数（列数 × 行数）
     bool lastSucceeded;    // 最近一次检测是否通过
     Vector3 lastNormal;    // 最近一次通过的墙面法线
     Vector3 lastPoint;     // 最近一次通过的墙面锚点
@@ -64,6 +69,12 @@ public class WallProbe
 
     /// <summary>最近一次检测是否通过。</summary>
     public bool LastSucceeded => lastSucceeded;
+
+    /// <summary>最近一次检测收集到的命中射线数（全部射线均已发射统计，供覆盖式判定使用）。</summary>
+    public int LastHitCount => lastHitCount;
+
+    /// <summary>最近一次检测的总射线数（列数 × 行数）。</summary>
+    public int LastTotalCount => lastTotalCount;
 
     /// <summary>
     /// 检测角色前方是否是可攀爬的连续墙面（结果缓存于 Last* 属性）。
@@ -88,10 +99,10 @@ public class WallProbe
     {
         wallNormal = Vector3.zero;
         wallPoint = Vector3.zero;
-        lastHitCount = 0;
 
         int cols = Mathf.Clamp(columns, 1, MaxColumns);
         int rowCount = Mathf.Clamp(rows, 1, MaxRows);
+        int total = cols * rowCount;
 
         Vector3 dir = Vector3.ProjectOnPlane(forward, Vector3.up);
         if (dir.sqrMagnitude < MinDirectionSqr) return false;
@@ -101,6 +112,66 @@ public class WallProbe
         Vector3 basePos = root.position + Vector3.up * startHeight;
         QueryTriggerInteraction triggerMode = includeTriggers ? QueryTriggerInteraction.Collide : QueryTriggerInteraction.Ignore;
 
+        lastTotalCount = total;
+        int count = CastGrid(root, dir, right, basePos, triggerMode, cols, rowCount);
+        lastHitCount = count;
+
+        // 严格语义（进入攀爬用）：任一射线未命中 → 表面不连续
+        if (count < total) return false;
+
+        return ValidateSurface(count, dir, out wallNormal, out wallPoint);
+    }
+
+    /// <summary>
+    /// 覆盖式墙面检测（攀爬中持续贴墙用）：全部射线都发射并统计，不因个别射线缺失
+    /// （例如头顶射线越过墙顶）立即判失败。存在命中且命中点满足几何校验即返回 true；
+    /// 命中/总射线数经 out 与 Last* 暴露，是否“缺失过半”由调用方按需求判定
+    /// （攀爬状态用 Values.climbWallExitMissRatio，默认缺失 ≥ 50% 才退出）。
+    /// </summary>
+    public bool EvaluateCoverage(Transform root, Vector3 forward, out Vector3 wallNormal, out Vector3 wallPoint,
+                                 out int hitCount, out int totalCount)
+    {
+        bool ok = TryEvaluateCoverage(root, forward, out wallNormal, out wallPoint);
+        lastSucceeded = ok;
+        if (ok)
+        {
+            lastNormal = wallNormal;
+            lastPoint = wallPoint;
+        }
+        hitCount = lastHitCount;
+        totalCount = lastTotalCount;
+        return ok;
+    }
+
+    bool TryEvaluateCoverage(Transform root, Vector3 forward, out Vector3 wallNormal, out Vector3 wallPoint)
+    {
+        wallNormal = Vector3.zero;
+        wallPoint = Vector3.zero;
+
+        int cols = Mathf.Clamp(columns, 1, MaxColumns);
+        int rowCount = Mathf.Clamp(rows, 1, MaxRows);
+        int total = cols * rowCount;
+
+        Vector3 dir = Vector3.ProjectOnPlane(forward, Vector3.up);
+        if (dir.sqrMagnitude < MinDirectionSqr) return false;
+        dir.Normalize();
+
+        Vector3 right = Vector3.Cross(Vector3.up, dir).normalized;
+        Vector3 basePos = root.position + Vector3.up * startHeight;
+        QueryTriggerInteraction triggerMode = includeTriggers ? QueryTriggerInteraction.Collide : QueryTriggerInteraction.Ignore;
+
+        lastTotalCount = total;
+        int count = CastGrid(root, dir, right, basePos, triggerMode, cols, rowCount);
+        lastHitCount = count;
+
+        if (count == 0) return false;
+        return ValidateSurface(count, dir, out wallNormal, out wallPoint);
+    }
+
+    /// <summary>发射全部网格射线并收集命中点（不因个别未命中提前退出）。</summary>
+    int CastGrid(Transform root, Vector3 dir, Vector3 right, Vector3 basePos,
+                 QueryTriggerInteraction triggerMode, int cols, int rowCount)
+    {
         int count = 0;
         for (int c = 0; c < cols; c++)
         {
@@ -110,19 +181,24 @@ public class WallProbe
             for (int i = 0; i < rowCount; i++)
             {
                 Vector3 origin = columnOrigin + Vector3.up * (i * rowSpacing);
-                if (Physics.Raycast(origin, dir, out RaycastHit hit, rayLength, climbableLayer, triggerMode))
+                if (Physics.Raycast(origin, dir, out RaycastHit hit, rayLength, climbableLayer, triggerMode)
+                    && count < MaxRays)
                 {
                     hitPoints[count] = hit.point;
                     hitNormals[count] = hit.normal;
                     count++;
-                    lastHitCount = count;
-                }
-                else
-                {
-                    return false; // 任一射线未命中 → 表面不连续
                 }
             }
         }
+        return count;
+    }
+
+    /// <summary>用命中点做宏观法线拟合 + 竖直/面向/法线一致性校验；通过时输出墙面法线与锚点。</summary>
+    bool ValidateSurface(int count, Vector3 dir, out Vector3 wallNormal, out Vector3 wallPoint)
+    {
+        wallNormal = Vector3.zero;
+        wallPoint = Vector3.zero;
+        if (count <= 0) return false;
 
         // 宏观法线 = 各命中点表面法线的平均：墙面视为宏观平整、局部可有凹凸（凹凸会被平均掉）
         Vector3 n = Vector3.zero;

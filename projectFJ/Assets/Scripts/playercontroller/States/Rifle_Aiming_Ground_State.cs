@@ -3,14 +3,14 @@ using UnityEngine.Animations.Rigging;
 
 /// <summary>
 /// 具体状态：步枪（Rifle）× 瞄准（Aiming）× 着地（Ground）。
-/// 瞄准移动与 test.cs（UpdateAimSpeed/aim 分支）一致：
+/// 瞄准移动与 早期原型（UpdateAimSpeed/aim 分支）一致：
 /// - 旋转：始终朝向相机水平前方（look 改变相机朝向时角色随之旋转；SmoothDampAngle 阻尼追角，
 ///   参数 aimRotateSmoothTime / aimRotateMaxSpeed；无移动输入也持续追踪——"相机朝哪、角色朝哪"）；
 /// - 速度：瞄准锁定行走档（不接受奔跑，Shift 无效：跑 + 瞄准表现不可用）；档位速度平滑后，
 ///   投影到相机前/右轴得到前后/左右目标，两轴各自 MoveTowards 平滑（aimAcceleration），供 2D 混合树（horizontal/vertical speed）；
 /// - 垂直：着地保持向下压速度；瞄准中走下边沿 → 累积重力，过死区后【提议】
 ///   （Rifle, Normal, Jumping）（请求边裁决——瞄准状态没有滞空组合，切过去即取消瞄准）；
-/// - 位移：OnAnimatorMove 沿用动画根运动（2D 混合树）+ 手写垂直分量（test.cs 同款）；
+/// - 位移：OnAnimatorMove 沿用动画根运动（2D 混合树）+ 手写垂直分量（早期原型 同款）；
 /// - 动画参数：本类只写水平/垂直速度分量；body/hand/handing 由主体类按状态组合同步
 ///   （本状态 Hand=Aiming → hand posture=1 驱动瞄准动画分支）。
 ///
@@ -26,7 +26,7 @@ using UnityEngine.Animations.Rigging;
 /// </summary>
 public class Rifle_Aiming_Ground_State : PlayerStateBase
 {
-    #region 状态内结构常量（语义见注释；可调参数见 PlayerMotionValues）
+    #region 状态内结构常量（语义见注释；可调参数见 PlayerMotionValuesSO）
     /// <summary>着地（非下落）时 falling speed 分量的常态值。</summary>
     static readonly float NoFallingSpeed = 0f;
     /// <summary>过渡时长下限（s）：防"过渡时长为 0"导致除零/瞬间完成（Inspector 输入 0 或负值时兜底）。</summary>
@@ -500,7 +500,7 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
 
     public override void OnAnimatorMove(PlayerContext ctx)
     {
-        // 瞄准地面：沿用动画根运动（2D 混合树）+ 手写垂直分量（test.cs 同款）
+        // 瞄准地面：沿用动画根运动（2D 混合树）+ 手写垂直分量（早期原型 同款）
         Vector3 delta = ctx.Animator.deltaPosition;
         delta.y = ctx.Motion.VerticalVelocity * Time.deltaTime;
         ctx.CharacterController.Move(delta);

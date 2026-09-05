@@ -87,9 +87,9 @@ public class PlayerControllerScript : MonoBehaviour
     [SerializeField] PlayerInputState input = new PlayerInputState();
     #endregion
 
-    #region 运动数值（物理常量 + 纯计算，实现见 PlayerMotionValues.cs；状态类经 PlayerContext.Values 读取）
+    #region 运动数值（物理常量 + 纯计算，见 PlayerMotionValuesSO.cs；资产单例承载，组件只持引用——Play Mode 中改资产即实时全局生效）
     [Header("运动数值")]
-    [SerializeField] PlayerMotionValues motionValues = new PlayerMotionValues();
+    [SerializeField] PlayerMotionValuesSO motionValues;
     #endregion
 
     #region 物理探测（着地判定：替代 CharacterController.isGrounded——边缘帧级抽搐，见 GroundProbe.cs）
@@ -99,24 +99,40 @@ public class PlayerControllerScript : MonoBehaviour
     [Header("墙面探测（攀爬检测，参数化射线阵列，见 WallProbe.cs）")]
     [SerializeField] WallProbe wallProbe = new WallProbe();
 
+    [Header("调试 Gizmos（全部默认关闭；勾选后按类别在 Scene 视图显示）")]
+    [Tooltip("瞄准调试（相机瞄准线/落点/枪口轴向）")]
+    [SerializeField] bool showAimGizmos;
+    [Tooltip("攀爬手/脚 IK 调试（目标、手骨实际位置、连线）")]
+    [SerializeField] bool showClimbIkGizmos;
+    [Tooltip("登顶到顶探测调试（手掌锚点、向上竖线、探测射线颜色）")]
+    [SerializeField] bool showClimbTopOutGizmos;
+    [Tooltip("墙面探测阵列调试（选中角色时显示；编辑模式下开启即实时预览命中）")]
+    [SerializeField] bool showWallProbeGizmos;
+    [Tooltip("着地探测调试（选中角色时显示）")]
+    [SerializeField] bool showGroundProbeGizmos;
+
     /// <summary>编辑模式选中角色时显示着地探测 Gizmos（下沿球/射线/命中点）。</summary>
     void OnDrawGizmosSelected()
     {
         var cc = characterController != null ? characterController : GetComponent<CharacterController>();
-        groundProbe.DrawGizmos(transform, cc);
-        wallProbe.DrawGizmos(transform, transform.forward);
+        if (showGroundProbeGizmos) groundProbe.DrawGizmos(transform, cc);
+        if (showWallProbeGizmos) wallProbe.DrawGizmos(transform, transform.forward);
     }
 
     /// <summary>
     /// 调试可视化（Scene 视图常驻，运行时生效）：
     /// - 瞄准：落点（命中=青线绿球 / 远点=黄线黄球）+ 枪约束驱动对象（白球 + 品红瞄准轴射线）；
-    /// - 攀爬 IK（values.climbIkDebugGizmos 且正攀爬时）：青色 = 双手 IK 目标，
+    /// - 攀爬 IK（showClimbIkGizmos 且正攀爬时）：青色 = 双手 IK 目标，
     ///   黄色 = 手骨（腕）实际位置，红色 = 目标到手骨连线（线越长 = IK 越没拉到位）。
+    /// - 登顶探测（showClimbTopOutGizmos）：手掌锚点上方射向墙面的射线——黄色 = 命中墙面（仍在爬），
+    ///   绿色 = 未命中（已越过墙顶、到顶候选）。
+    /// 以上均需对应开关开启（默认全关）。
     /// </summary>
     void OnDrawGizmos()
     {
-        DrawAimGizmos();
-        DrawClimbIkGizmos();
+        if (showAimGizmos) DrawAimGizmos();
+        if (showClimbIkGizmos) DrawClimbIkGizmos();
+        if (showClimbTopOutGizmos) DrawClimbTopOutGizmos();
     }
 
     void DrawAimGizmos()
@@ -154,6 +170,16 @@ public class PlayerControllerScript : MonoBehaviour
         Gizmos.DrawWireSphere(context.ClimbLeftTarget, 0.09f);
         Gizmos.DrawWireSphere(context.ClimbRightTarget, 0.09f);
 
+        // IK 目标轴向（调旋转偏移时参考）：红 = 目标 +X、绿 = +Y、蓝 = +Z
+        if (leftHandConstraint != null && leftHandConstraint.data.target != null)
+            DrawTargetAxes(leftHandConstraint.data.target);
+        if (rightHandConstraint != null && rightHandConstraint.data.target != null)
+            DrawTargetAxes(rightHandConstraint.data.target);
+        if (leftLegConstraint != null && leftLegConstraint.data.target != null)
+            DrawTargetAxes(leftLegConstraint.data.target);
+        if (rightLegConstraint != null && rightLegConstraint.data.target != null)
+            DrawTargetAxes(rightLegConstraint.data.target);
+
         // 手骨实际位置（黄色线框）
         Gizmos.color = Color.yellow;
         Gizmos.DrawWireSphere(context.ClimbLeftHandPos, 0.06f);
@@ -163,6 +189,53 @@ public class PlayerControllerScript : MonoBehaviour
         Gizmos.color = Color.red;
         Gizmos.DrawLine(context.ClimbLeftTarget, context.ClimbLeftHandPos);
         Gizmos.DrawLine(context.ClimbRightTarget, context.ClimbRightHandPos);
+    }
+
+    /// <summary>
+    /// 登顶到顶探测调试绘制（攀爬状态经 PlayerContext 每帧写入；非攀爬/未开启调试时 TopOutProbeActive = false 不绘制）：
+    /// 白圈 = 被选中的手掌锚点（TwoBoneIK target），白色竖线 = 向上偏移；射线——黄色 = 命中墙面侧面（仍在爬），
+    /// 绿色 = 未命中（已越过墙顶、到顶候选）；终点球画在墙面表面（命中时）或射线尽头（未命中时）。
+    /// 登顶期间另画抓取点调试：品红球 = 墙顶扫描 + topOutMatchPositionOffset 后的 MatchTarget 目标（含扫描起点→抓取点连线），
+    /// 橙色球 = 扫描失败回退的 IK target 快照（说明抓取点不是缘上，需调扫描参数）。
+    /// </summary>
+    void DrawClimbTopOutGizmos()
+    {
+        if (context == null) return;
+
+        if (context.TopOutProbeActive)
+        {
+            // 手掌锚点（被选中的高位手 target）
+            Gizmos.color = Color.white;
+            Gizmos.DrawWireSphere(context.TopOutProbeAnchor, 0.08f);
+            // 向上偏移竖线：锚点 → 射线起点（起点沿墙面法线外拉，横向偏移很小）
+            Gizmos.DrawLine(context.TopOutProbeAnchor, context.TopOutProbeOrigin);
+
+            // 探测射线：黄色 = 命中墙面侧面（仍在爬）；绿色 = 未命中（到顶候选）
+            Gizmos.color = context.TopOutProbeHitWall ? Color.yellow : Color.green;
+            Gizmos.DrawLine(context.TopOutProbeOrigin, context.TopOutProbeEnd);
+            Gizmos.DrawWireSphere(context.TopOutProbeOrigin, 0.06f);
+            Gizmos.DrawWireSphere(context.TopOutProbeEnd, 0.06f);
+        }
+
+        // 登顶抓取点（Enter 一次性写入；退出登顶后清空）
+        if (context.TopOutGrabPointValid)
+        {
+            Gizmos.color = context.TopOutGrabUsedScan ? Color.magenta : new Color(1f, 0.5f, 0f);
+            Gizmos.DrawLine(context.TopOutGrabScanOrigin, context.TopOutGrabPoint);
+            Gizmos.DrawWireSphere(context.TopOutGrabPoint, 0.1f);
+        }
+    }
+
+    /// <summary>以 target 位置为原点绘制三色轴向（调参参照：红 X / 绿 Y / 蓝 Z）。</summary>
+    static void DrawTargetAxes(Transform t)
+    {
+        const float axisLen = 0.12f;
+        Gizmos.color = Color.red;
+        Gizmos.DrawRay(t.position, t.right * axisLen);
+        Gizmos.color = Color.green;
+        Gizmos.DrawRay(t.position, t.up * axisLen);
+        Gizmos.color = Color.blue;
+        Gizmos.DrawRay(t.position, t.forward * axisLen);
     }
 
     static Vector3 AimAxisToVector(MultiAimConstraintData.Axis axis)
@@ -211,7 +284,7 @@ public class PlayerControllerScript : MonoBehaviour
     /// 把 target 写回初始化时缓存的场景值 → 与状态类标定写入竞态一帧；去掉绑定后 Animator 不再写它，
     /// 轨迹改由本方法按 "Switching Weapon" 动画进度逐帧写入（脚本侧唯一权威，时序同状态类 Update 写入）。
     /// 轨迹 = 标定位（chestRightHandAnchorLocalPosition/Euler）→ 中段位（rifleSwitchIkMidLocalPosition/Euler）
-    /// → 回到标定位；grab/put 的离位/中段/回归时间窗取自原 clip 关键帧，见 PlayerMotionValues。
+    /// → 回到标定位；grab/put 的离位/中段/回归时间窗取自原 clip 关键帧，见 PlayerMotionValuesSO。
     /// 非切换动画帧直接返回：常态由 Rifle_Normal_Ground_State.WriteRightHandCalibratedPose 维持标定值。
     /// </summary>
     void UpdateRightHandSwitchIkTarget()
@@ -228,7 +301,7 @@ public class PlayerControllerScript : MonoBehaviour
         bool isGrab = context.Handing == PlayerHanding.Rifle;
         if (!isPut && !isGrab) return;   // 其他武器切换（暂无）需另行扩展
 
-        PlayerMotionValues v = context.Values;
+        PlayerMotionValuesSO v = context.Values;
         float t = Mathf.Clamp01(nt);
 
         // 位置与旋转在原 clip 中的关键帧时间窗不同，分别采样（原 clip 关键帧间为 0 切线，
@@ -289,7 +362,7 @@ public class PlayerControllerScript : MonoBehaviour
         const float overlapEpsilon = 0.005f;
         if (twoWeight <= overlapEpsilon || chainWeight <= overlapEpsilon) return;
 
-        PlayerMotionValues v = context.Values;
+        PlayerMotionValuesSO v = context.Values;
 
         // 持枪标定位：标定值（Chest 局部）还原到世界
         Transform anchor = twoBoneTarget.parent;
@@ -392,9 +465,17 @@ public class PlayerControllerScript : MonoBehaviour
     }
     #endregion
 
-    #region 武器动画事件（Animation Event 分发：Function 填 OnWeaponEvent，String 填分发键）
+    #region Animation Event 分发
     // 入口写在主体类（Animator 所在对象）：Rifle 引用已在手，Rifle.GetComponent<WeaponSwitch>()
     // 直接取到武器切换脚本，无需再挂独立组件/拖引用。
+
+    /// <summary>
+    /// 登顶动画事件：climb to end.anim 在 1.0s（悬挂结束）处触发。函数名与动画事件面板的
+    /// functionName 一致（勿改，改会断事件）；收到后经状态机转发给当前登顶状态，由其中断悬挂手匹配。
+    /// </summary>
+    public void HandGrabEdgeEnd()
+        => machine?.NotifyAnimEvent(Unarmed_Normal_ClimbTopOut_State.AnimEventHandGrabEdgeEnd);
+
     /// <summary>武器动画事件入口（仅 String 参数）。</summary>
     public void OnWeaponEvent(string message) => DispatchWeaponEvent(message);
 
@@ -432,11 +513,15 @@ public class PlayerControllerScript : MonoBehaviour
     }
     #endregion
 
-    #region 攀爬进入检测（Jump 信号边条件：攀爬优先、跳跃兜底）
+    #region 攀爬进入检测（地面 Jump 信号边 + 滞空持久边共用条件：墙面命中 + 水平速度朝墙）
     /// <summary>
-    /// 跳跃键统一"移动动作"的攀爬优先判定：
+    /// 可攀爬判定（两处共用，见 InitStateMachine）：
     /// ① 墙面探测命中（参数化射线阵列，见 WallProbe）；
     /// ② 存在朝向墙面的速度——水平速度大小 ≥ 阈值，且方向与墙面法线反方向夹角 ≤ climbApproachAngle。
+    /// 用途 1（地面 Jump 信号边）：跳跃键统一"移动动作"——命中 → 直接进攀爬，未命中 → 跳跃兜底；
+    /// 用途 2（滞空持久边）：滞空期每帧重测——不论上升/下降，命中即抓墙进攀爬。起跳瞬间
+    ///   离墙稍远（超出墙面探测距离）或水平速度不足导致地面判定未命中的场景，
+    ///   由飞行/下落途中的本判定补上，不再只在"起跳按下"那一刻检测。
     /// 站立按 Jump（速度 ≈ 0）不满足条件 → 走跳跃兜底。
     /// </summary>
     bool TryEnterClimb(PlayerContext ctx)
@@ -489,6 +574,8 @@ public class PlayerControllerScript : MonoBehaviour
             PlayerStateFactory.Create(PlayerHanding.Rifle, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground));
         machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Climbing,
             PlayerStateFactory.Create(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Climbing));
+        machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.ClimbTopOut,
+            PlayerStateFactory.Create(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.ClimbTopOut));
 
         // —— 空手 ——
         // ⓪ 信号边（攀爬优先，必须注册在 ① 跳跃边【之前】——注册顺序 = 裁决优先级，命中即切换）：
@@ -508,7 +595,7 @@ public class PlayerControllerScript : MonoBehaviour
             triggerSignal: PlayerInputState.Signal.Jump,
             label: "跳跃（空手·地面起跳）"));
 
-        // ② 请求边：滞空 → 地面（落地；垂直速度 ≤ 判定阈值防起跳瞬间着地标志残留误判，对应 test.cs 落地断言）
+        // ② 请求边：滞空 → 地面（落地；垂直速度 ≤ 判定阈值防起跳瞬间着地标志残留误判，对应 早期原型 落地断言）
         machine.RegisterEdge(new TransitionEdge(
             PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping,
             PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
@@ -523,6 +610,17 @@ public class PlayerControllerScript : MonoBehaviour
                            || ctx.Motion.VerticalVelocity > ctx.Values.airborneRiseThreshold,
             label: "走出边沿进入滞空（空手）"));
 
+        // ③a 持久边：滞空 → 攀爬（空中抓墙，上升/下降均可）——
+        //    地面 Jump 判定只在"起跳按下瞬间"探测一次：起跳时离墙稍远（超过墙面探测距离）或
+        //    水平速度尚不足即漏判，此后滞空期再无检测。本边在滞空期每帧用同一条件重测，
+        //    飞行上升段 / 下落途中一旦墙面命中 + 水平速度朝墙即进入攀爬（不要求再次按键）。
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping,
+            PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Climbing,
+            condition: TryEnterClimb,
+            evaluateEveryFrame: true,
+            label: "空中抓墙（滞空·上升/下降均检测）"));
+
         // ③b 信号边：攀爬中按退出输入（QuitClimb）→ 退回默认姿态（地面）
         machine.RegisterEdge(new TransitionEdge(
             PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Climbing,
@@ -530,12 +628,28 @@ public class PlayerControllerScript : MonoBehaviour
             triggerSignal: PlayerInputState.Signal.QuitClimb,
             label: "退出攀爬"));
 
-        // ③c 请求边：攀爬 → 地面（物理驱逐：墙面连续失效，由攀爬状态在 Tick 中提议）
+        // ③c 请求边：攀爬 → 地面（物理驱逐 / 自动退出，均由攀爬状态在 Tick 中提议）：
+        //    - 墙面覆盖式复测缺失 ≥ climbWallExitMissRatio 连续 climbExitMissFrames 帧（ctx.ClimbWallLost）；
+        //    - 向下爬至可着陆连续 climbDownExitFrames 帧（ctx.ClimbDownReachedGround）；
+        //    - 兜底：严格探测 LastSucceeded=false（历史语义保留）。
         machine.RegisterEdge(new TransitionEdge(
             PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Climbing,
             PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
-            condition: ctx => !ctx.WallProbe.LastSucceeded,
-            label: "墙面失效退出攀爬"));
+            condition: ctx => !ctx.WallProbe.LastSucceeded || ctx.ClimbWallLost || ctx.ClimbDownReachedGround,
+            label: "退出攀爬（脱墙 / 向下爬至可着陆）"));
+
+        // ③d 请求边：登顶 → 地面（登顶动画 Tag=ClimbToEnd 播放结束，由登顶状态 Tick 提议）
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.ClimbTopOut,
+            PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            label: "登顶动画结束退出"));
+
+        // ③e 请求边：攀爬 → 登顶（手部到顶探测命中后由攀爬状态提议并写入固定手，
+        //    见 Unarmed_Normal_Climbing_State.TryRequestTopOut）
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Climbing,
+            PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.ClimbTopOut,
+            label: "到顶进入登顶（悬挂手固定）"));
 
         // —— 步枪 ——
         // ④ 信号边：空手按 1（SlotRifle）→ 切换步枪（地面正常手部）。

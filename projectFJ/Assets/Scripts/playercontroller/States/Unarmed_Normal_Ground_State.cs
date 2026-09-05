@@ -2,22 +2,22 @@ using UnityEngine;
 
 /// <summary>
 /// 具体状态：空手（Unarmed）× 正常手部（Normal）× 着地（Ground）。
-/// 地面移动参照 test.cs（Rotate / UpdateSpeed / UpdateVerticalVelocity 地面分支）：
+/// 地面移动参照 早期原型（Rotate / UpdateSpeed / UpdateVerticalVelocity 地面分支）：
 /// - 旋转：WASD → 相机轴世界朝向，RotateTowards 插值转向（无输入不转向）；
 /// - 水平速度：目标 = 无武器档位（走 2 / 跑 4 × 输入模长），常态 MoveTowards 恒加速度插值；
 ///   武器切换（空手↔持枪）后按 Switching Weapon 动画进度做旧→新档位插值（检测不到动画时兜底 weaponSwitchSpeedBlendTime）；
 /// - 垂直：着地保持向下压速度；离地（走下边沿）累积重力，越过死区阈值时【提议】切滞空（请求边裁决）；
-/// - 位移：OnAnimatorMove 沿用动画根运动水平分量 + 手写垂直分量（test.cs 同款）；
+/// - 位移：OnAnimatorMove 沿用动画根运动水平分量 + 手写垂直分量（早期原型 同款）；
 /// - 动画参数：body posture = 0；vertical/horizontal speed = 水平面内前后/左右分量（非瞄准：全速进前后、左右 0）；
 ///   falling speed = 垂直方向速度（原始 m/s，正值向上/负值向下，越界由混合树钳制；落地过渡期保持捕获值）。
 ///
-/// 数值约定：所有可调参数集中在 PlayerMotionValues（Inspector 可调）；
+/// 数值约定：所有可调参数集中在 PlayerMotionValuesSO（Inspector 可调）；
 /// 状态内结构常量集中定义在本类顶部——禁止散落无说明的字面值。
 /// 跳跃触发不在本类：Jump 信号边在 Tick 前先知裁决（见 PlayerControllerScript.InitStateMachine）。
 /// </summary>
 public class Unarmed_Normal_Ground_State : PlayerStateBase
 {
-    #region 状态内结构常量（语义见注释；可调参数见 PlayerMotionValues）
+    #region 状态内结构常量（语义见注释；可调参数见 PlayerMotionValuesSO）
     /// <summary>落地过渡计时归零值（计时结束判定）。</summary>
     static readonly float TimerExpired = 0f;
     /// <summary>无下落捕获时的 falling speed 分量（常态分量）。</summary>
@@ -132,7 +132,7 @@ public class Unarmed_Normal_Ground_State : PlayerStateBase
 
     public override void OnAnimatorMove(PlayerContext ctx)
     {
-        // 地面：沿用动画根运动（水平）+ 手写垂直分量（test.cs 同款）；
+        // 地面：沿用动画根运动（水平）+ 手写垂直分量（早期原型 同款）；
         // 落地过渡期 landingFallBlend 只影响动画下落姿态参数，位移以贴地速度为准。
         Vector3 delta = ctx.Animator.deltaPosition;
         delta.y = ctx.Motion.VerticalVelocity * Time.deltaTime;
@@ -141,7 +141,7 @@ public class Unarmed_Normal_Ground_State : PlayerStateBase
 
     void RotateTowardMoveDirection(PlayerContext ctx)
     {
-        // 无输入不改变朝向（test.cs 同款）
+        // 无输入不改变朝向（早期原型 同款）
         if (ctx.Input.Move.sqrMagnitude <= ctx.Values.minMoveSqrMagnitude) return;
 
         Vector3 moveDir = CameraSpaceMoveDir(ctx);
@@ -154,7 +154,7 @@ public class Unarmed_Normal_Ground_State : PlayerStateBase
 
     void WriteAnimatorParams(PlayerContext ctx, float horizontalSpeed)
     {
-        // 落地过渡：保持捕获的下落速度（动画下落姿态参数）；计时结束释放（对应 test.cs stance 回 0 后归零）
+        // 落地过渡：保持捕获的下落速度（动画下落姿态参数）；计时结束释放（对应 早期原型 stance 回 0 后归零）
         if (landingBlendActive)
         {
             landingBlendTimer -= Time.deltaTime;

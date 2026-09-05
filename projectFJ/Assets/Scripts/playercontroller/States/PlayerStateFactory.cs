@@ -27,6 +27,7 @@ public static class PlayerStateFactory
             // 滞空 / 攀爬 × 正常手部 × 空手
             { new PlayerStateKey(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping), () => new Unarmed_Normal_Jumping_State() },
             { new PlayerStateKey(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Climbing), () => new Unarmed_Normal_Climbing_State() },
+            { new PlayerStateKey(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.ClimbTopOut), () => new Unarmed_Normal_ClimbTopOut_State() },
             // 滞空 × 正常手部 × 步枪
             { new PlayerStateKey(PlayerHanding.Rifle,   PlayerHandPosture.Normal, PlayerBodyPosture.Jumping), () => new Rifle_Normal_Jumping_State() },
         };
