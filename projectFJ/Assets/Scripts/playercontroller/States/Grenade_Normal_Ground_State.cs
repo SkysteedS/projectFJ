@@ -1,15 +1,247 @@
+using UnityEngine;
+
 /// <summary>
 /// 具体状态：手雷（Grenade）× 正常手部（Normal）× 着地（Ground）。
-/// 规划中：工厂已映射本组合，但控制器尚未注册、无转换边 → 运行期不可达；
-/// 接入手雷槽位（SlotGrenade 信号边 + 注册 + 入边）时启用，其余零改动。
-/// 预期行为：手雷为低速辅助武器（不可跑），能力差异在状态类内直接处理。
+/// 复刻自 Pistol_Normal_Ground_State（手枪方案直接复制到手雷，行为要点一一对应）：
+/// - 旋转：WASD → 相机轴世界朝向，RotateTowards 插值转向（无输入不转向）；
+/// - 水平速度：目标 = 手雷（持有）档位（走 2 / 跑 4 × 输入模长，见 PlayerMotionValuesSO，可调），
+///   常态 MoveTowards 恒加速度插值；武器切换（空手⇄持雷）后按 Switching Weapon 动画进度做
+///   旧→新档位插值（检测不到动画时兜底 weaponSwitchSpeedBlendTime）；
+/// - 垂直：着地保持向下压速度；离地（走下边沿）累积重力，越过死区阈值时【提议】切滞空
+///   （目标组合 Grenade×Normal×Jumping，请求边见 PlayerControllerScript）；
+/// - 位移：OnAnimatorMove 沿用动画根运动水平分量 + 手写垂直分量；
+/// - 动画参数：本类只写水平/垂直速度分量；body posture / hand posture / player handing
+///   由主体类按当前状态组合每帧同步。
+///
+/// 程序化 IK（复刻手枪锚点体系，锚点标定值见 PlayerMotionValuesSO）：
+/// 手雷以右手动作为主：仅右手 TwoBoneIK target 每帧写入 grenadeRightHandAnchorLocalPosition/Euler
+/// （Chest 子物体 local）；左手不写入，左臂姿态由动画驱动。
+/// 右手标定值全 0（未标定）时跳过写入并告警一次——避免把 target 错误拉到 Chest 原点。
+///
+/// 接入状态：控制器已注册本组合，SlotGrenade 进出信号边已接入（空手按 3 拔雷、再按 3 收回）；
+/// 手雷模型/挂点/拔收雷动画事件由编辑器装配。
+/// 瞄准接入见 Grenade_Aiming_Ground_State（肘部轴点方案：轴点传递俯仰、偏航由弧线落点模块给出，
+/// 与枪械"枪口轴点对齐视线"不同）。
 /// </summary>
 public class Grenade_Normal_Ground_State : PlayerStateBase
 {
+    #region 状态内结构常量（语义见注释；可调参数见 PlayerMotionValuesSO）
+    /// <summary>落地过渡计时归零值（计时结束判定）。</summary>
+    static readonly float TimerExpired = 0f;
+    /// <summary>无下落捕获时的 falling speed 分量（常态分量）。</summary>
+    static readonly float NoLandingFallSpeed = 0f;
+    #endregion
+
+    float landingFallBlend;     // 落地时捕获的垂直速度（原始 m/s，负值向下；落地过渡期保持）
+    float landingBlendTimer;    // 落地过渡保持计时（与动画 body posture 过渡时长对齐）
+    bool landingBlendActive;    // 落地过渡是否进行中
+    bool rightHandIkWarned;     // 右手 IK 锚点装配缺失时只警告一次（防刷屏）
+    bool rightHandCalibWarned;  // 右手 IK 标定值未设置（全 0）时只警告一次（防刷屏）
+    float weaponSwitchBlendTimer;       // 武器切换速度插值兜底计时（动画未检测到时用）
+    float weaponSwitchStartSpeed;       // 武器切换插值起点（旧武器档位速度，Enter 捕获）
+    bool weaponSwitchBlendActive;       // 武器切换速度插值进行中
+    bool weaponSwitchAnimDriven;        // 已检测到切换动画（此后进度与动画 normalizedTime 同步，直到动画退出）
+
+    #region 状态生命周期与移动（Enter/Tick/旋转/速度/垂直交接）
+    public override void Enter(PlayerContext ctx)
+    {
+        // 跨状态交接：滞空→落地仅"仍在下降"段才捕获，供落地过渡保持下落姿态。
+        landingBlendActive = ctx.Motion.VerticalVelocity < ctx.Values.landingVerticalThreshold;
+        landingFallBlend = landingBlendActive ? ctx.Motion.VerticalVelocity : NoLandingFallSpeed;
+        landingBlendTimer = landingBlendActive ? ctx.Values.landingBlendTime : TimerExpired;
+
+        // 武器切换（状态机 SwitchTo 时写入 HandingChanged 标记）：捕获当前速度作为插值起点，
+        // 启动"旧武器档位 → 新武器档位"的速度插值（进度与 Switching Weapon 动画 normalizedTime 同步，
+        // 动画未检测到时用 weaponSwitchSpeedBlendTime 兜底计时；标记用后即毁）。
+        if (ctx.Motion.HandingChanged)
+        {
+            ctx.Motion.HandingChanged = false;
+            weaponSwitchBlendActive = true;
+            weaponSwitchAnimDriven = false;
+            weaponSwitchBlendTimer = ctx.Values.weaponSwitchSpeedBlendTime;
+            weaponSwitchStartSpeed = ctx.Motion.HorizontalSpeed;
+        }
+        else
+        {
+            weaponSwitchBlendActive = false;
+        }
+
+        // 着地：保持与地面接触的向下压速度
+        var velocity = ctx.Motion.Velocity;
+        velocity.y = ctx.Values.groundStickSpeed;
+        ctx.Motion.Velocity = velocity;
+
+        // 右手手部 IK：脚本是唯一权威写入者——标定值由每帧 WriteRightHandCalibratedPose 维持
+        // （未标定全 0 时跳过并告警）。手雷不采用步枪的"切换中段轨迹接管"：拔雷/持雷动画帧直接
+        // 写标定值；退出（收雷）不还原"进入前原值"——那通常是场景序列化的调试位，还原会在 put
+        // 开头（IK 权重混合期）把右手拉回场景调试位（旧 Write Defaults 问题的同类来源）。
+    }
+
     public override void Tick(PlayerContext ctx)
     {
-        // 待实现（接入槽位时补齐，参考 Rifle_Normal_Ground_State 的完整实现）：
-        // - 行走速度（不可跑，能力差异在状态类内处理）
-        // - 转向
+        float dt = Time.deltaTime;
+
+        // 右手手部 IK：每帧写入标定值（脚本唯一权威；退出不还原，保持末帧标定值进入 put 混合；
+        // 未标定全 0 时跳过并告警）
+        WriteRightHandCalibratedPose(ctx);
+
+        RotateTowardMoveDirection(ctx);
+
+        // 水平速度：目标 = 手雷（持有）档位（走 2 / 跑 4，可调）× 输入模长（模长为准）；
+        // 武器切换过渡期做"旧档位 → 新档位"的时间线性插值（与切换动画时长匹配），
+        // 常态回到 MoveTowards 恒加速度插值（从 Motion.HorizontalSpeed 续值，无断点）。
+        float targetSpeed = (ctx.Input.Run ? ctx.Values.grenadeRunSpeed : ctx.Values.grenadeWalkSpeed)
+                            * ctx.Input.Move.magnitude;
+        float speed;
+        if (weaponSwitchBlendActive)
+        {
+            // 武器切换速度插值：进度优先与 Switching Weapon 动画同步（nt = 动画 normalizedTime），
+            // 动画播完/退出即收尾（nt↗1 → 速度为新档位）；动画未检测到时用兜底计时。
+            float nt;
+            if (ctx.TryGetWeaponSwitchAnimProgress(out float animNt))
+            {
+                weaponSwitchAnimDriven = true;
+                nt = animNt;
+                if (nt >= 1f) weaponSwitchBlendActive = false;
+            }
+            else if (weaponSwitchAnimDriven)
+            {
+                weaponSwitchBlendActive = false;
+                nt = 1f;
+            }
+            else
+            {
+                weaponSwitchBlendTimer -= dt;
+                nt = 1f - Mathf.Clamp01(weaponSwitchBlendTimer / ctx.Values.weaponSwitchSpeedBlendTime);
+                if (weaponSwitchBlendTimer <= 0f) weaponSwitchBlendActive = false;
+            }
+            speed = Mathf.Lerp(weaponSwitchStartSpeed, targetSpeed, Mathf.Clamp01(nt));
+        }
+        else
+        {
+            speed = ctx.Values.MoveGrenadeSpeed(ctx.Motion.HorizontalSpeed,
+                                                ctx.Input.Move.magnitude, ctx.Input.Run, dt);
+        }
+
+        // 垂直：着地贴地 / 离地累积重力（走下边沿）
+        float vertical = ctx.Motion.VerticalVelocity;
+        vertical = ctx.IsGrounded
+            ? ctx.Values.groundStickSpeed
+            : ctx.Values.ApplyGravity(vertical, dt);
+
+        // 写回共享运动槽（水平分量叠加移动方向——无输入沿用最后方向，速度标量插值衰减）
+        Vector3 moveDir = MoveDirection(ctx);
+        var velocity = ctx.Motion.Velocity;
+        velocity.x = moveDir.x * speed;
+        velocity.z = moveDir.z * speed;
+        velocity.y = vertical;
+        ctx.Motion.Velocity = velocity;
+
+        // 离地且垂直速度越过死区 → 提议进滞空（转换条件由请求边裁决；切换后中止本帧写入）
+        if (!ctx.IsGrounded
+            && (vertical < ctx.Values.airborneFallThreshold || vertical > ctx.Values.airborneRiseThreshold))
+        {
+            ctx.RequestTransition(PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping);
+            return;
+        }
+
+        WriteAnimatorParams(ctx, speed);
     }
+    #endregion
+
+    #region 手部 IK（右手标定锚点写入）
+    /// <summary>
+    /// 每帧【写入】标定值（Chest 基准局部坐标）——脚本是唯一权威写入者：
+    /// target 局部值 = 标定值（grenadeRightHandAnchorLocalPosition/Euler，见 PlayerMotionValuesSO）。
+    /// 不做 Enter 记录/Exit 还原：还原会把 target 拉回场景序列化的默认位（put 开头可见的"调试位置"）。
+    /// </summary>
+    void WriteRightHandCalibratedPose(PlayerContext ctx)
+    {
+        Transform target = ctx.RightHandConstraint != null ? ctx.RightHandConstraint.data.target : null;
+        if (target == null)
+        {
+            if (!rightHandIkWarned)
+            {
+                rightHandIkWarned = true;
+                Debug.LogWarning(
+                    "[RightHandIK] 同步无效：右手 TwoBoneIK 约束 data.target 未装配",
+                    ctx.Transform);
+            }
+            return;
+        }
+
+        // 标定守卫：位置与欧拉仍全 0 视为未标定，跳过写入并告警一次（避免把 target 拉到 Chest 原点）；
+        // 在场景摆好手雷、把锚点标定值填入 PlayerMotionValuesSO 后即生效。
+        if (ctx.Values.grenadeRightHandAnchorLocalPosition == Vector3.zero
+            && ctx.Values.grenadeRightHandAnchorLocalEuler == Vector3.zero)
+        {
+            if (!rightHandCalibWarned)
+            {
+                rightHandCalibWarned = true;
+                Debug.LogWarning(
+                    "[RightHandIK][Grenade] 标定值未设置：grenadeRightHandAnchorLocalPosition/Euler 全 0，已跳过写入（待编辑器标定）",
+                    ctx.Transform);
+            }
+            return;
+        }
+
+        target.localPosition = ctx.Values.grenadeRightHandAnchorLocalPosition;
+        target.localRotation = Quaternion.Euler(ctx.Values.grenadeRightHandAnchorLocalEuler);
+
+        // 逐帧调试日志（rightHandIkFrameDebugLog）：打印「脚本写入后」的值，与帧末日志对比定位覆盖来源
+        if (ctx.Values.rightHandIkFrameDebugLog)
+        {
+            Debug.Log($"[RightHandIK][Grenade] Write  f{Time.frameCount} {target.name} " +
+                      $"localPos={target.localPosition:F3} localRot={target.localRotation.eulerAngles:F1} " +
+                      $"| calibrated={ctx.Values.grenadeRightHandAnchorLocalPosition:F3}&{ctx.Values.grenadeRightHandAnchorLocalEuler:F1}");
+        }
+    }
+    #endregion
+
+    #region 位移与动画参数（OnAnimatorMove / WriteAnimatorParams）
+    public override void OnAnimatorMove(PlayerContext ctx)
+    {
+        // 地面：沿用动画根运动（水平）+ 手写垂直分量；
+        // 落地过渡期 landingFallBlend 只影响动画下落姿态参数，位移以贴地速度为准。
+        Vector3 delta = ctx.Animator.deltaPosition;
+        delta.y = ctx.Motion.VerticalVelocity * Time.deltaTime;
+        ctx.CharacterController.Move(delta);
+    }
+
+    void RotateTowardMoveDirection(PlayerContext ctx)
+    {
+        // 无输入不改变朝向
+        if (ctx.Input.Move.sqrMagnitude <= ctx.Values.minMoveSqrMagnitude) return;
+
+        Vector3 moveDir = CameraSpaceMoveDir(ctx);
+        if (moveDir.sqrMagnitude <= ctx.Values.minMoveSqrMagnitude) return;
+
+        Quaternion target = Quaternion.LookRotation(moveDir, Vector3.up);
+        ctx.Transform.rotation = Quaternion.RotateTowards(ctx.Transform.rotation, target,
+                                                          ctx.Values.rotateSpeed * Time.deltaTime);
+    }
+
+    void WriteAnimatorParams(PlayerContext ctx, float horizontalSpeed)
+    {
+        // 落地过渡：保持捕获的下落速度（动画下落姿态参数）；计时结束释放
+        if (landingBlendActive)
+        {
+            landingBlendTimer -= Time.deltaTime;
+            if (landingBlendTimer <= TimerExpired)
+            {
+                landingFallBlend = NoLandingFallSpeed;
+                landingBlendTimer = TimerExpired;
+                landingBlendActive = false;
+            }
+        }
+
+        var anim = ctx.AnimParams;   // 值缓存写入器：同值跳过 SetFloat
+        // 水平面内速度分量：非瞄准时角色朝向移动方向——全速进前后轴（vertical speed），左右轴固定为 0
+        anim.SetFloat(PlayerControllerScript.AnimVerticalSpeed, horizontalSpeed);
+        anim.SetFloat(PlayerControllerScript.AnimHorizontalSpeed, ctx.Values.nonAimLateralSpeed);
+        // 垂直方向速度（原始 m/s，正值向上/负值向下；越界由混合树钳制）：着地为 0，落地过渡期保持捕获值
+        anim.SetFloat(PlayerControllerScript.AnimFallingSpeed,
+                      landingBlendActive ? landingFallBlend : NoLandingFallSpeed);
+    }
+    #endregion
 }

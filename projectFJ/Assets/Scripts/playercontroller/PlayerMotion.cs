@@ -34,4 +34,11 @@ public class PlayerMotion
     /// 新状态 Enter 读取后清除（用后即毁）。供地面移动状态启用"武器切换速度插值"。
     /// </summary>
     public bool HandingChanged;
+
+    /// <summary>
+    /// 切换前的手持——仅武器切换（HandingChanged）时由状态机 SwitchTo 写入，不在状态层清除。
+    /// 用途：主体类拔/收枪 IK 接管需要识别"收的是哪把武器"；收枪后当前 Handing 已回到 Unarmed，
+    /// 单凭当前状态无法区分（当前仅步枪启用切换中段轨迹接管，手枪/手雷一律不接管）。
+    /// </summary>
+    public PlayerHanding PreviousHanding;
 }

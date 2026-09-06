@@ -188,7 +188,11 @@ public class PlayerStateMachine
     {
         // 记录"本次切换是否改变了手持（武器切换）"到共享交接槽——由新状态 Enter 读取并清除，
         // 供其启用"武器切换速度插值"（旧武器档位 → 新武器档位的时间线性过渡）。
-        ctx.Motion.HandingChanged = currentKey.Handing != to.Handing;
+        bool handingChanged = currentKey.Handing != to.Handing;
+        ctx.Motion.HandingChanged = handingChanged;
+        // 同步记录切换前手持（不随 HandingChanged 清除）：主体类拔/收枪 IK 接管用
+        // （收枪后当前 Handing 已回到 Unarmed，需凭此识别上一武器）。
+        if (handingChanged) ctx.Motion.PreviousHanding = currentKey.Handing;
 
         currentState?.Exit(ctx);
         currentKey = to;

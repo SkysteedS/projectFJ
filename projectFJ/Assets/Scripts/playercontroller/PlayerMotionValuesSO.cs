@@ -42,6 +42,37 @@ public class PlayerMotionValuesSO : ScriptableObject
     [Tooltip("手枪（持枪）奔跑速度（m/s）：手枪 + Shift 目标档位（暂定 4，Inspector 可调）")]
     public float pistolRunSpeed = 4f;
 
+    [Tooltip("手雷（持有）行走速度（m/s）：手雷地面状态目标档位（暂定与手枪同值 2，Inspector 可调）")]
+    public float grenadeWalkSpeed = 2f;
+
+    [Tooltip("手雷（持有）奔跑速度（m/s）：手雷 + Shift 目标档位（暂定与手枪同值 4，Inspector 可调）")]
+    public float grenadeRunSpeed = 4f;
+
+    [Header("手雷投掷 · 弧线预览（探测 / 显示 / 淡入）")]
+    [Tooltip("落点探测精化步长（s）：粗采样进入落地区间后，用该步长精化截断点")]
+    public float grenadeArcDetectTimeStep = 0.02f;
+
+    [Tooltip("落点探测粗采样最大步数（0.1s × N ≈ 飞行上限；默认 60 ≈ 6s）")]
+    public int grenadeArcDetectMaxSteps = 60;
+
+    [Tooltip("着陆探测：垂直射线起点相对采样点的上抬（m）")]
+    public float grenadeArcGroundProbeUp = 0.5f;
+
+    [Tooltip("着陆探测：垂直射线最大长度（m）")]
+    public float grenadeArcGroundProbeDistance = 5f;
+
+    [Tooltip("着陆判定：采样点高度接近地面该值以内视为落地（m）")]
+    public float grenadeArcLandingTolerance = 0.12f;
+
+    [Tooltip("手雷弧线预览显示采样点数：越大弧线越平滑（仅显示密度；与落点探测解耦）。投掷初速不在此处配置，读取手雷上 BulletManage.bulletData.bulletInitialSpeed")]
+    public int grenadeArcSampleCount = 60;
+
+    [Tooltip("弧线淡入时长（s）：进入瞄准并稳定显示后，透明度从 0 平滑升到 1")]
+    public float grenadeArcFadeInTime = 0.25f;
+
+    [Tooltip("进瞄准后弧线显示延迟（s）：等手雷根过渡/手部到位后再浮现弧线")]
+    public float grenadeArcShowDelay = 0.15f;
+
     [Header("运动 · 插值与转向")]
     [Tooltip("地面档位速度插值加速度（m/s²）：空手/步枪/手枪地面速度以该加速度逼近目标（MoveTowards 恒速）")]
     public float moveAcceleration = 12f;
@@ -141,6 +172,10 @@ public class PlayerMotionValuesSO : ScriptableObject
     [Tooltip("左手 IK 锚点作为【手枪子物体】的 local 旋转（Euler）——复刻步枪体系；当前为占位 0，待编辑器标定")] public Vector3 pistolLeftHandAnchorLocalEuler = Vector3.zero;
     [Tooltip("右手 TwoBoneIK target 作为【Chest 骨骼子物体】的 local 位置——复刻步枪 chestRightHandAnchorLocalPosition 体系；当前为占位 0，待编辑器标定")] public Vector3 pistolRightHandAnchorLocalPosition = Vector3.zero;
     [Tooltip("右手 TwoBoneIK target 作为【Chest 骨骼子物体】的 local 旋转（Euler）——复刻步枪体系；当前为占位 0，待编辑器标定")] public Vector3 pistolRightHandAnchorLocalEuler = Vector3.zero;
+
+    [Header("手部 IK 锚点 · 手雷 · 右手（复刻手枪体系；手雷以右手动作为主，左手不写入、由动画驱动）")]
+    [Tooltip("右手 TwoBoneIK target 作为【Chest 骨骼子物体】的 local 位置——复刻步枪 chestRightHandAnchorLocalPosition 体系；当前为占位 0，待编辑器标定（全 0 未标定时 Grenade 状态类跳过写入并告警）")] public Vector3 grenadeRightHandAnchorLocalPosition = Vector3.zero;
+    [Tooltip("右手 TwoBoneIK target 作为【Chest 骨骼子物体】的 local 旋转（Euler）——复刻步枪体系；当前为占位 0，待编辑器标定（全 0 未标定时 Grenade 状态类跳过写入并告警）")] public Vector3 grenadeRightHandAnchorLocalEuler = Vector3.zero;
 
     [Header("调试 · 右手 IK 写入日志")]
     [Tooltip("右手 IK 逐帧调试日志：常态帧打印「Write（标定写入）」与「FrameEnd（帧末实际值）」，帧末 ≠ 写入即 Animator 写回覆盖；拔/收枪切换帧打印「Switch」说明由脚本按动画进度接管（帧末 ≠ Write 属预期）（调试完关闭）")]
@@ -335,6 +370,13 @@ public class PlayerMotionValuesSO : ScriptableObject
     /// </summary>
     public float MovePistolSpeed(float current, float inputMagnitude, bool run, float deltaTime)
         => Mathf.MoveTowards(current, (run ? pistolRunSpeed : pistolWalkSpeed) * inputMagnitude,
+                             moveAcceleration * deltaTime);
+
+    /// <summary>
+    /// 手雷（持有）档位速度插值：目标 = 档位（走 2 / 跑 4，可调）× 输入模长，恒加速度逼近。
+    /// </summary>
+    public float MoveGrenadeSpeed(float current, float inputMagnitude, bool run, float deltaTime)
+        => Mathf.MoveTowards(current, (run ? grenadeRunSpeed : grenadeWalkSpeed) * inputMagnitude,
                              moveAcceleration * deltaTime);
 
     /// <summary>

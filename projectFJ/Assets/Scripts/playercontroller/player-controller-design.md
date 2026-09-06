@@ -23,10 +23,11 @@
 | 轴间交叉约束 | 建模为"能力许可表"（每武器声明允许的行为集）+ 正交规则表，主体类单点执行（输入守卫 / 转换条件 / 强制补救 三环节） | [已确认] |
 | 临时姿态（登顶/翻越） | Body 轴新增"走廊状态"子类，插入 = 枚举+注册+转换表边+规则表行，不改旧状态类 | [已确认] |
 | 攀爬触发方式 | **不设独立攀爬输入**：跳跃键为统一"移动动作"请求，先做可攀爬检测，命中→直接进攀爬，未命中→跳跃 | [已确认] |
-| 能力许可表 | **随扁平化退役**：行为合法性由"状态/边的存在性"编码（无 Rifle×Climbing 状态即不可达）；状态内行为差异（如步枪不奔跑）在具体状态类内实现 | [已确认] |
+| 能力许可表 | **随扁平化退役**：行为合法性由"状态/边的存在性"编码（无 Rifle×Climbing 状态即不可达）；状态内行为差异（如瞄准锁定行走档）在具体状态类内实现 | [已确认] |
 | 转换表实现 | 字典委托表（数据驱动，扩展不动旧代码）；**已落地**为"转换边列表 + 信号驱动/请求驱动"（PlayerStateMachine.cs，注册顺序=裁决优先级，信号消费与裁决分离） | [已确认] |
 | 走廊状态基类 | 暂不定义：`IsTransient` 预留缺口已随死代码清理移除，登顶/翻越实现时再引入走廊状态类与基类标记 | [已确认] |
 | 手持类别建模 | 作为**装备数据**（枚举+能力声明），非状态机 | [待确认—已推荐] |
+| 程序化 IK target 写入权威 | **脚本唯一权威**：武器地面态每帧写各自标定值；不做 Enter/Exit 还原（还原写回场景默认位 = 旧 Write Defaults 同类表现）；rifle grab/put 的中段轨迹由主体类按动画进度接管 | [已确认 2026-09-06] |
 
 ## 3. 总体架构
 
@@ -132,12 +133,14 @@ test.cs 中 `handing`（当前武器）从输入层**移出**：它是"游戏状
 
 ```
 三个枚举（保持正交，与 PlayerControllerScript 动画参数直接对齐）：
-  PlayerBodyPosture(Ground/Jumping/Climbing) · PlayerHandPosture(Normal/Aiming) · PlayerHanding(Unarmed/Rifle/Pistol/Grenade)
+  PlayerBodyPosture(Ground/Jumping/Climbing/ClimbTopOut) · PlayerHandPosture(Normal/Aiming) · PlayerHanding(Unarmed/Rifle/Pistol/Grenade)
 
 PlayerStateKey（内部键，外层不可见）：三枚举组合，当前合法组合（能力表推导）：
-  Unarmed×Normal×Ground / Rifle×Normal×Ground / Pistol×Normal×Ground / Grenade×Normal×Ground
-  Rifle×Aiming×Ground / Unarmed×Normal×Jumping / Unarmed×Normal×Climbing
-  └─ 非法组合（持枪攀爬、瞄准中跳跃…）没有状态类、没有转换边 → 天然不可达（无需规则表）
+  Unarmed×Normal×Ground/Jumping/Climbing/ClimbTopOut
+  Rifle×Normal×Ground/Jumping / Rifle×Aiming×Ground
+  Pistol×Normal×Ground/Jumping / Pistol×Aiming×Ground
+  Grenade×Normal×Ground/Jumping（Grenade 暂不接入 Aiming）
+  └─ 非法组合（持枪攀爬、Grenade 瞄准…）没有状态类、没有转换边 → 天然不可达（无需规则表）
 
 PlayerStateFactory（工厂）：Create(三枚举) → 状态类实例（创建清单唯一集中处，内部以 Key 映射）
 PlayerStateMachine（单机）：
@@ -212,10 +215,11 @@ machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBod
 
 | 想表达 | 编码位置 |
 |---|---|
-| 持枪不能攀爬/跳跃 | 状态枚举无 Rifle×Climbing/Jumping 组合；工厂无映射；无对应边 |
-| 非步枪不能瞄准 | 仅有一条 `(Rifle, Normal, Ground) → (Rifle, Aiming, Ground)` 瞄准入边 |
-| 手枪可跑、步枪不可跑 | `Pistol_Normal_Ground_State` 实现奔跑档 / `Rifle_Normal_Ground_State` 不响应 Run 键（状态类内，各自负责） |
-| 瞄准中不能切枪/跳跃 | `Rifle_Aiming_Ground` 无对应出边 |
+| 持枪不能攀爬 | 状态枚举无 Rifle/Pistol/Grenade×Climbing 组合；工厂无映射；无对应边 |
+| 瞄准仅限步枪/手枪 | 仅 Rifle/Pistol 的 `Normal×Ground → Aiming×Ground` 入边；无 Grenade×Aiming 组合 |
+| 各武器可跑，瞄准锁定行走档 | 走/跑档位集中在 `PlayerMotionValuesSO`（rifle 1.5/3.5、pistol 2/4、grenade 2/4、unarmed 2/4）；瞄准状态不响应 Run |
+| 瞄准中不能切武器 | Rifle/Pistol Aiming 组合无槽位信号出边 |
+| 瞄准中可跳跃（自动取消瞄准） | Aiming→Normal×Jumping 信号边（⑥/⑯） |
 
 > 早期正交方案中的"能力许可表"（PlayerCapabilities）已随扁平化退役：它曾是轴间约束的唯一来源，但"状态/边存在性"已更直接地编码同一约束，保留反而造成"状态集合/边集合/能力表"三处信息需同步、易漂移。若未来需要面向 UI 的"当前不能做什么"提示，可从边/状态清单派生（或届时建立武器配置数据），届时再引入。
 
@@ -223,10 +227,10 @@ machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBod
 
 | 想做的事情 | 为什么不可达 |
 |---|---|
-| 持枪攀爬 / 持枪跳跃 | 不存在 `Rifle*Climbing/Jumping` 状态类与入边 |
-| 瞄准中切武器 / 瞄准中跳跃 | `RifleAimingGround` 没有对应的出边 |
+| 持枪攀爬 | 不存在 Rifle/Pistol/Grenade×Climbing 状态类与入边 |
+| 瞄准中切武器 | Rifle/Pistol Aiming 组合无槽位出边 |
 | 跳跃/攀爬中切武器 | 对应状态无切枪出边 |
-| 非步枪瞄准 | 仅有 `RifleNormalGround→RifleAimingGround` 一条瞄准入边 |
+| Grenade 瞄准 | 无 Grenade×Aiming 组合与入边（暂未接入） |
 
 所有"禁止"都是"无节点/无边"，与动画状态机里"没有连线"同构——这正是扁平化的最大收益。
 
@@ -234,7 +238,7 @@ machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBod
 
 插入 `TopOut`：BodyPosture 加枚举行 + 新增状态类 + 工厂加一行映射 + 注册 `((Unarmed, Normal, Climbing) → (Unarmed, Normal, TopOut))` 与 `((Unarmed, Normal, TopOut) → (Unarmed, Normal, Ground))` 边 + Climbing 状态类到顶处一行 `RequestTransition`。其余状态零改动。
 
-### 6.7 地面/滞空复用提炼计划（规划中——Pistol 与 Grenade 完成后统一处理）
+### 6.7 地面/滞空复用提炼计划（Pistol 与 Grenade 已落地，提炼尚未实施）
 
 **动机**：`Unarmed/Rifle × Normal × Ground/Jumping` 目前是"同一套地面/滞空逻辑 + 武器差异"的
 复制实现：武器切换速度插值、落地过渡、转向、WriteAnimatorParams 在 Unarmed 与 Rifle 各存一份；
@@ -247,7 +251,8 @@ machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBod
    （landingFallBlend/landingBlendTimer/active）、武器切换速度插值（weaponSwitchBlend*）、
    旋转（RotateTowardMoveDirection）、常规 WriteAnimatorParams；差异点向下暴露：
    - 速度档位：数值层提供按 Handing 的档位查询（走/跑目标速度 + 是否可跑），或子类覆写
-     `WalkSpeed/RunSpeed/CanRun`（Pistol 可跑、Grenade 不可跑、Unarmed/Rifle 各档位不变）；
+     `WalkSpeed/RunSpeed/CanRun`（Pistol/Grenade 可跑，Unarmed/Rifle 各档位不变；Grenade 另声明
+     左手不写 IK，瞄准暂不接入）；
    - 目标组合：请求边/信号边仍由机器注册，状态类自身不持有切换表。
 2. `NormalJumpingStateBase`：收走滞空惯性/重力/落地判定/WriteAnimatorParams；
    具体子类（Unarmed/Rifle/Pistol）只提供"落回哪个 Handing 组合"。
@@ -258,7 +263,41 @@ machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBod
 保持各自独立；拔/收枪切换的 target 轨迹协调继续留在主体类。
 
 **约束与验收**：只做机械上提，不改变行为；完成后 Unarmed/Rifle 跑、跳、落地、切换速度插值
-回归一致（对照现行为）；Grenade/Pistol 接入时不再复制移动逻辑，仅声明差异。
+回归一致（对照现行为）；提炼完成后 Pistol/Grenade 不再复制移动逻辑，仅声明差异。
+
+### 6.8 程序化 IK 的写入权威与 target 生命周期（2026-09-06 定稿）
+
+**背景**：动画 clip 已不绑定任何 IK target 变换曲线（原绑定会造成 Animator Write Defaults 在切换帧
+把 target 写回场景默认值，全部移除，见提交 `899fbdf` 记录）。此后脚本是 IK target 的唯一权威写入者，
+任何“把 target 交还动画/还原原值”的写入都必须重新审视其原值是否仍被系统维护。
+
+**写入分工**：
+
+| 阶段 | 左手 TwoBoneIK target | 右手 TwoBoneIK target | 双手 ChainIK target |
+|---|---|---|---|
+| Unarmed Ground 常态 | 不写 | 不写 | 不写（权重为 0） |
+| Rifle / Pistol Ground 常态 | 每帧写“武器根 × 锚点”世界位姿 | 每帧写各自 SO 标定值（Chest 子级 local） | 不写 |
+| Grenade Ground 常态 | **不写**（手雷以右手动作为主，左臂由动画驱动） | 每帧写 grenade 标定值（未标定全 0 时跳过并告警） | 不写 |
+| Rifle grab/put 动画帧 | 状态写入后由主体类 `UpdateRightHandSwitchIkTarget` 覆盖为“标定位 → rifleSwitchIkMid → 标定位”轨迹 | 同左（中段位 = rifle 的“另一个 IK 位置”） | 不写 |
+| Pistol / Grenade grab/put 动画帧 | pistol 每帧写标定值；grenade 不写左 | 每帧写标定值（掏/收动作简单，**不采用** rifle 的中段轨迹方案） | 不写 |
+| Aiming（Rifle / Pistol） | 不写（瞄准姿态由动画/肩链表现） | 与 ChainIK 的 crossfade 争抢由主体类 `UpdateRightHandAimBlendTargets` 统一写到同一混合位 | 每帧由瞄准状态写“腕-枪相对位姿 × 当前枪根位姿” |
+
+**明确不再使用的机制**：地面状态曾做“Enter 记录 target 原 TRS → Exit 还原”（Capture/Restore，随
+`899fbdf` 一并加入，注释为“交还动画系统/下一状态”）。target 曲线全部移除后该“原值”是无主的
+场景序列化默认位——Exit 还原等于把 target 写回调试位，在 put 动画开头的 IK 权重混合期可见（与旧
+Write Defaults 同表现）。2026-09-06 已从 Rifle / Pistol / Grenade 地面态删除：退出即保留末帧标定值，
+rifle put 仍由主体类轨迹接管，pistol/grenade put 直接交给动画/权重淡出。
+
+**仍然有效的“记录-恢复”仅限瞄准态内部**：瞄准进入时记录枪根原父级与 local TRS、捕获“腕-枪相对
+位姿”常量，退出时 `RestoreAimRig` 恢复（见 code-conventions §6）——对象是枪根与腕位常量，与
+TwoBoneIK target 的生命周期无关，不要混为一谈。
+
+**收枪识别**：机器 `SwitchTo` 在手持变化时写入 `PlayerMotion.PreviousHanding`（不随 HandingChanged
+清除），供主体类区分“步枪收枪”（走中段轨迹）与 pistol/grenade 收枪（不接管）。
+
+**遗留观察项**：grenade 右手锚点待编辑器标定（标定前 grenade 态跳过右手写入）；左手 TwoBoneIK
+target 目前只写不还（Pistol/Rifle 均无 Enter/Exit 存还，Grenade 不写左），跨武器会话的残留值是否
+可见取决于对应 put/grab 动画的左手 IK weight——若再出现串味，按本节“脚本唯一权威”原则处理。
 
 ## 7. 文件组织
 
@@ -276,10 +315,13 @@ Assets/playercontroller/
 │   ├── PlayerStateBase.cs              [已实现]
 │   ├── Unarmed_Normal_Ground_State.cs  [已实现]
 │   ├── Rifle_Normal_Ground_State.cs    [已实现]
-│   ├── Pistol_Normal_Ground_State.cs   [已实现-骨架]
-│   ├── Grenade_Normal_Ground_State.cs  [已实现-骨架]
+│   ├── Pistol_Normal_Ground_State.cs   [已实现]
+│   ├── Grenade_Normal_Ground_State.cs  [已实现]
 │   ├── Rifle_Aiming_Ground_State.cs    [已实现]
+│   ├── Pistol_Aiming_Ground_State.cs   [已实现]
 │   ├── Rifle_Normal_Jumping_State.cs   [已实现]
+│   ├── Pistol_Normal_Jumping_State.cs  [已实现]
+│   ├── Grenade_Normal_Jumping_State.cs [已实现]
 │   ├── Unarmed_Normal_Jumping_State.cs [已实现]
 │   ├── Unarmed_Normal_Climbing_State.cs [已实现]
 │   └── Unarmed_Normal_ClimbTopOut_State.cs [已实现·走廊状态]
@@ -310,7 +352,7 @@ Assets/playercontroller/
 | Phase 0 | 设计文档 | 完成 |
 | Phase 1 | 输入层解耦（PlayerInputState + 桥接 + test.cs 改名） | 完成 |
 | Phase 2 | 数值层落地（PlayerMotionValuesSO + PlayerMotion 交接槽 + PlayerAnimatorParams 缓存写入） | 完成 |
-| Phase 3 | 状态机（扁平单机：组合状态枚举 + 单字典单边表 + 三种转换边） | **架构已完成**：7 个合法组合状态类骨架、边注册清单、非法组合天然不可达；状态内运动逻辑待做 |
+| Phase 3 | 状态机（扁平单机：组合状态枚举 + 单字典单边表 + 三种转换边） | **架构已完成**：合法组合状态类全部落地并注册（含 Unarmed/Rifle/Pistol/Grenade 的地面、滞空与瞄准组合）；状态内运动逻辑已完成，非法组合天然不可达 |
 | Phase 4 | 主体类重组、回调桥接、场景接入 | 输入桥接已完成；场景接入待 Unity 侧 |
 | Phase 5 | 回归验证（对照 test.cs 行为） | 待 Phase 3/4 |
 

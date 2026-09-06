@@ -186,6 +186,8 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
     /// 命中检测仍保留：作为准星判定/调试信息（LastAimHit/LastAimPoint），未来子弹与曳光特效使用。
     /// 枪口在"进瞄准过渡期"指向角色身前（角色可能仍在转身，若此时追相机瞄准点，
     /// 枪口会随转身扫出大圆弧），过渡结束后切换到视线远点。
+    /// 过渡期方向 = 角色 yaw + 相机 pitch：偏航随角色对齐过程平滑，俯仰提前取相机值，
+    /// 避免过渡结束切到视线远点时出现俯仰阶跃。
     /// 只移动目标对象 position，不改约束引用（约束装配即定，与本项目程序化 IK 目标约定一致）；
     /// 约束 weight 由动画参数经 SetIKweight 回写，本方法不参与。
     /// </summary>
@@ -346,13 +348,32 @@ public class Rifle_Aiming_Ground_State : PlayerStateBase
         rigRoot.localRotation = Quaternion.identity;
     }
 
-    /// <summary>过渡期枪口 aim 目标：角色身前（沿角色 forward 的远点；水平原点取轴点，保证无额外俯仰）。</summary>
+    /// <summary>
+    /// 过渡期枪口 aim 目标：角色身前远点，方向 = 角色 yaw（水平 forward）+ 相机 pitch。
+    /// 水平原点取轴点；角色仍在转身对齐相机 yaw 期间枪口不追相机 yaw，但俯仰直接取相机，
+    /// 使过渡结束切到视线远点时俯仰连续（偏航残余由转身插值吸收）。
+    /// </summary>
     Vector3 RifleFrontTarget(PlayerContext ctx)
     {
         Vector3 origin = rigPivot != null
             ? rigPivot.position
             : ctx.Transform.position + Vector3.up * FallbackAxisHeight;
-        return origin + ctx.Transform.forward * ctx.Values.aimRayDistance;
+
+        // 默认 = 角色正前方（无相机时回退）
+        Vector3 dir = ctx.Transform.forward;
+        Camera cam = ctx.MainCamera;
+        if (cam != null)
+        {
+            Vector3 camF = cam.transform.forward;
+            float camHoriz = Mathf.Sqrt(camF.x * camF.x + camF.z * camF.z);
+            if (camHoriz > 1e-4f)
+            {
+                // 水平分量保留角色 yaw（dir），竖直分量取相机俯仰（camF.y，上正下负）
+                dir = new Vector3(dir.x * camHoriz, camF.y, dir.z * camHoriz);
+                if (dir.sqrMagnitude > MinAimDirSqr) dir.Normalize();
+            }
+        }
+        return origin + dir * ctx.Values.aimRayDistance;
     }
 
     /// <summary>

@@ -26,10 +26,6 @@ public class Rifle_Normal_Ground_State : PlayerStateBase
     bool landingBlendActive;    // 落地过渡是否进行中
     bool leftHandIkWarned;      // 左手 IK 写入无效时只警告一次（防刷屏）
     bool rightHandIkWarned;     // 右手 IK 锚点装配缺失时只警告一次（防刷屏）
-    Transform rightHandIkTarget;            // 右手 TwoBoneIK target（Enter 缓存；退出清空）
-    bool rightHandSaved;                    // 是否已记录进入前局部 TRS（Exit 还原用）
-    Vector3 rightHandSavedLocalPosition;    // 进入前局部位置（Exit 还原）
-    Quaternion rightHandSavedLocalRotation; // 进入前局部旋转（Exit 还原）
     float weaponSwitchBlendTimer;       // 武器切换速度插值兜底计时（动画未检测到时用）
     float weaponSwitchStartSpeed;       // 武器切换插值起点（旧武器档位速度，Enter 捕获）
     bool weaponSwitchBlendActive;       // 武器切换速度插值进行中
@@ -64,16 +60,10 @@ public class Rifle_Normal_Ground_State : PlayerStateBase
         velocity.y = ctx.Values.groundStickSpeed;
         ctx.Motion.Velocity = velocity;
 
-        // 右手手部 IK 锚点：进入时记录原局部 TRS（Exit 还原用）；标定值由每帧
-        // WriteRightHandCalibratedPose 无条件写入（常态帧写入即固定；拔/收枪切换帧
-        // 由 PlayerControllerScript.UpdateRightHandSwitchIkTarget 在本帧后续覆盖为动画轨迹）
-        CaptureRightHandOrigin(ctx);
-    }
-
-    public override void Exit(PlayerContext ctx)
-    {
-        // 右手手部 IK 锚点：退出时还原进入前记录的局部坐标（交还动画系统/下一状态）
-        RestoreRightHandAnchor(ctx);
+        // 右手手部 IK：脚本是唯一权威写入者——标定值由每帧 WriteRightHandCalibratedPose 无条件维持。
+        // 拔/收枪切换帧由 PlayerControllerScript.UpdateRightHandSwitchIkTarget 在本帧后续覆盖为动画轨迹；
+        // 退出（收枪/跳等）不还原"进入前原值"——那通常是场景序列化的调试位，还原会在 put 开头
+        // （IK 权重混合期）把右手拉回场景调试位（旧 Write Defaults 问题的同类来源）。
     }
 
     public override void Tick(PlayerContext ctx)
@@ -83,7 +73,7 @@ public class Rifle_Normal_Ground_State : PlayerStateBase
         // 左手手部 IK 目标实时计算（步枪正常状态每帧）：目标 = 枪根当前位姿 × 护木锚点基准，
         // 左手贴护木、随武器/动画运行（不再依赖 rifle idle hand ik.anim 的路径驱动）
         UpdateLeftHandIkTarget(ctx);
-        // 右手手部 IK：每帧写入标定值（进入时已记录原值供退出还原）；拔/收枪切换动画帧
+        // 右手手部 IK：每帧写入标定值（脚本唯一权威；退出不还原，避免写回场景调试位）；拔/收枪切换动画帧
         // 由主体类 UpdateRightHandSwitchIkTarget 在 Tick 之后覆盖为本帧动画轨迹值
         WriteRightHandCalibratedPose(ctx);
 
@@ -151,7 +141,7 @@ public class Rifle_Normal_Ground_State : PlayerStateBase
     }
     #endregion
 
-    #region 手部 IK（左手护木同步 / 右手标定锚点记录-写入-还原）
+    #region 手部 IK（左手护木同步 / 右手标定锚点写入）
     /// <summary>
     /// 左手手部 IK 目标实时计算（步枪正常状态，每帧）。
     /// 遵循项目 IK 约定【只更新 transform、不修改 target】：
@@ -187,16 +177,16 @@ public class Rifle_Normal_Ground_State : PlayerStateBase
     }
 
     /// <summary>
-    /// 右手手部 IK 锚点——进入时只【记录】原局部 TRS（Exit 还原用），不写入任何值。
-    /// 右手是控制枪的手（枪挂右手腕下，不能由枪根反推——依赖环）；
-    /// 标定值由每帧 <see cref="WriteRightHandCalibratedPose"/> 无条件维持（本方法不写）。
+    /// 每帧【写入】标定值（Chest 基准局部坐标）——脚本是唯一权威写入者（动画不再绑定 target），
+    /// 常态帧写入即固定：target 局部值 = 标定值；拔/收枪（Switching Weapon）动画帧由
+    /// PlayerControllerScript.UpdateRightHandSwitchIkTarget 在状态 Tick 之后覆盖为动画轨迹值。
+    /// 不做 Enter 记录/Exit 还原：还原会把 target 拉回场景序列化的默认位（put 开头可见的"调试位置"）。
     /// </summary>
-    void CaptureRightHandOrigin(PlayerContext ctx)
+    void WriteRightHandCalibratedPose(PlayerContext ctx)
     {
-        rightHandIkTarget = ctx.RightHandConstraint != null ? ctx.RightHandConstraint.data.target : null;
-        if (rightHandIkTarget == null)
+        Transform target = ctx.RightHandConstraint != null ? ctx.RightHandConstraint.data.target : null;
+        if (target == null)
         {
-            rightHandSaved = false;
             if (!rightHandIkWarned)
             {
                 rightHandIkWarned = true;
@@ -207,42 +197,16 @@ public class Rifle_Normal_Ground_State : PlayerStateBase
             return;
         }
 
-        rightHandSaved = true;
-        rightHandSavedLocalPosition = rightHandIkTarget.localPosition;
-        rightHandSavedLocalRotation = rightHandIkTarget.localRotation;
-    }
-
-    /// <summary>
-    /// 每帧【写入】标定值（Chest 基准局部坐标）——脚本是唯一权威写入者（动画不再绑定 target），
-    /// 常态帧写入即固定：target 局部值 = 标定值；拔/收枪（Switching Weapon）动画帧由
-    /// PlayerControllerScript.UpdateRightHandSwitchIkTarget 在状态 Tick 之后覆盖为动画轨迹值。
-    /// </summary>
-    void WriteRightHandCalibratedPose(PlayerContext ctx)
-    {
-        if (!rightHandSaved || rightHandIkTarget == null) return;
-
-        rightHandIkTarget.localPosition = ctx.Values.chestRightHandAnchorLocalPosition;
-        rightHandIkTarget.localRotation = Quaternion.Euler(ctx.Values.chestRightHandAnchorLocalEuler);
+        target.localPosition = ctx.Values.chestRightHandAnchorLocalPosition;
+        target.localRotation = Quaternion.Euler(ctx.Values.chestRightHandAnchorLocalEuler);
 
         // 逐帧调试日志（rightHandIkFrameDebugLog）：打印「脚本写入后」的值，与帧末日志对比定位覆盖来源
         if (ctx.Values.rightHandIkFrameDebugLog)
         {
-            Debug.Log($"[RightHandIK] Write  f{Time.frameCount} {rightHandIkTarget.name} " +
-                      $"localPos={rightHandIkTarget.localPosition:F3} localRot={rightHandIkTarget.localRotation.eulerAngles:F1} " +
+            Debug.Log($"[RightHandIK] Write  f{Time.frameCount} {target.name} " +
+                      $"localPos={target.localPosition:F3} localRot={target.localRotation.eulerAngles:F1} " +
                       $"| calibrated={ctx.Values.chestRightHandAnchorLocalPosition:F3}&{ctx.Values.chestRightHandAnchorLocalEuler:F1}");
         }
-    }
-
-    /// <summary>退出时还原进入前记录的局部坐标（交还动画系统/下一状态）。</summary>
-    void RestoreRightHandAnchor(PlayerContext ctx)
-    {
-        if (rightHandSaved && rightHandIkTarget != null)
-        {
-            rightHandIkTarget.localPosition = rightHandSavedLocalPosition;
-            rightHandIkTarget.localRotation = rightHandSavedLocalRotation;
-        }
-        rightHandSaved = false;
-        rightHandIkTarget = null;
     }
     #endregion
 

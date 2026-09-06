@@ -57,6 +57,14 @@ public class PlayerContext
     public readonly Vector3 RifleAxisOffset;
     /// <summary>手枪根作为轴点子级时的 localPosition（PlayerControllerScript.pistolAimAxisOffset；手枪与步枪到轴点距离不同，独立标定）。</summary>
     public readonly Vector3 PistolAxisOffset;
+    /// <summary>手雷根（PlayerControllerScript.Grenade）：手雷瞄准/抛掷时作为轴点的子级。</summary>
+    public readonly Transform GrenadeRoot;
+    /// <summary>手雷轴点（PlayerControllerScript.grenadeAimAxisPoint，肘部附近）：俯仰旋转原点；代码只读，不写它的 transform。</summary>
+    public readonly Transform GrenadeAxisPoint;
+    /// <summary>手雷根作为轴点子级时的 localPosition（PlayerControllerScript.grenadeAimAxisOffset；肘部到手雷握持点的标定值）。</summary>
+    public readonly Vector3 GrenadeAxisOffset;
+    /// <summary>手雷根作为轴点子级时的 localRotation（PlayerControllerScript.grenadeAimAxisLocalEuler 换算）：横握手雷相对肘部轴点的朝向标定。</summary>
+    public readonly Quaternion GrenadeAxisLocalRotation;
     /// <summary>退出瞄准时枪要恢复的父级（PlayerControllerScript.RightHandWrist；为空时用进入前父级）。</summary>
     public readonly Transform RightHandWrist;
 
@@ -152,7 +160,10 @@ public class PlayerContext
                          ChainIKConstraint rightArmChainConstraint = null, ChainIKConstraint leftArmChainConstraint = null,
                          Transform rifleRoot = null, Transform aimAxisPoint = null,
                          Vector3 rifleAxisOffset = default, Transform rightHandWrist = null,
-                         Transform pistolRoot = null, Vector3 pistolAxisOffset = default)
+                         Transform pistolRoot = null, Vector3 pistolAxisOffset = default,
+                         Transform grenadeRoot = null, Transform grenadeAxisPoint = null,
+                         Vector3 grenadeAxisOffset = default,
+                         Quaternion grenadeAxisLocalRotation = default)
     {
         Animator = animator;
         AnimParams = new PlayerAnimatorParams(animator);
@@ -174,6 +185,10 @@ public class PlayerContext
         BodyAimConstraint = bodyAimConstraint;
         RifleRoot = rifleRoot;
         PistolRoot = pistolRoot;
+        GrenadeRoot = grenadeRoot;
+        GrenadeAxisPoint = grenadeAxisPoint;
+        GrenadeAxisOffset = grenadeAxisOffset;
+        GrenadeAxisLocalRotation = grenadeAxisLocalRotation;
         AimAxisPoint = aimAxisPoint;
         RifleAxisOffset = rifleAxisOffset;
         PistolAxisOffset = pistolAxisOffset;

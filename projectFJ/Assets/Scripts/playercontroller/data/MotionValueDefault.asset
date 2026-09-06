@@ -18,6 +18,9 @@ MonoBehaviour:
   rifleRunSpeed: 3.5
   pistolWalkSpeed: 2
   pistolRunSpeed: 4
+  grenadeWalkSpeed: 2
+  grenadeRunSpeed: 4
+  grenadeArcSampleCount: 90
   moveAcceleration: 9
   rotateSpeed: 500
   weaponSwitchSpeedBlendTime: 0.5
@@ -54,6 +57,8 @@ MonoBehaviour:
   pistolLeftHandAnchorLocalEuler: {x: 60, y: 105.3, z: -66}
   pistolRightHandAnchorLocalPosition: {x: 0.005, y: -0.12, z: 0.23}
   pistolRightHandAnchorLocalEuler: {x: -212.511, y: 266.677, z: 330.643}
+  grenadeRightHandAnchorLocalPosition: {x: 0.2969527, y: 0.2651736, z: 0.08686674}
+  grenadeRightHandAnchorLocalEuler: {x: -165.974, y: 299.005, z: 220.255}
   rightHandIkFrameDebugLog: 0
   rifleSwitchIkMidLocalPosition: {x: 0.1499, y: 0.3577, z: -0.1358}
   rifleSwitchIkMidLocalEuler: {x: -50, y: 185.38, z: 261.551}

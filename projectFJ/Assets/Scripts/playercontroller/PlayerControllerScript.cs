@@ -64,6 +64,8 @@ public class PlayerControllerScript : MonoBehaviour
     public GameObject Rifle;
     /// <summary>手枪根（PlayerControllerScript.Pistol）：手枪正常状态左手 IK 目标参照；由你在场景拖入，未接入前可为空。</summary>
     public GameObject Pistol;
+    /// <summary>手雷根（PlayerControllerScript.Grenade）：拔/收手雷动画事件切挂点用（GrabGrenade/PutGrenade）；由你在场景拖入，未接入前可为空。</summary>
+    public GameObject Grenade;
     public GameObject RightHandWrist;
 
     [Tooltip("轴点（旋转不变点/枪托抵肩点）：由你在场景放置并拖入；是 Multi-Aim 的约束对象。代码只读，不写它的 transform")]
@@ -74,6 +76,15 @@ public class PlayerControllerScript : MonoBehaviour
 
     [Tooltip("手枪根作为轴点子级时的 localPosition（offset）：手枪瞄准期间每帧写入；手枪与步枪到轴点的距离不同，需单独标定，Inspector 调整后立即生效")]
     public Vector3 pistolAimAxisOffset = Vector3.zero;
+
+    [Tooltip("手雷轴点（肘部附近）：手雷瞄准/抛掷俯仰的旋转原点；由你在场景放置并拖入。代码只读，不写它的 transform")]
+    public Transform grenadeAimAxisPoint;
+
+    [Tooltip("手雷根作为轴点子级时的 localPosition（offset）：手雷瞄准期间每帧写入；肘部到手雷握持点的标定值，Inspector 调整后立即生效")]
+    public Vector3 grenadeAimAxisOffset = Vector3.zero;
+
+    [Tooltip("手雷根作为轴点子级时的 localRotation（Euler）：手雷横握需要相对轴点的旋转标定（步枪/手枪瞄准姿态竖直、localRotation 恒等即可；手雷投掷前为横向，需把模型朝向转到目标方向）")]
+    public Vector3 grenadeAimAxisLocalEuler = Vector3.zero;
 
     public TwoBoneIKConstraint rightHandConstraint;
     public ChainIKConstraint rightArmChainConstraint;
@@ -305,6 +316,7 @@ public class PlayerControllerScript : MonoBehaviour
     /// 轨迹 = 标定位（chestRightHandAnchorLocalPosition/Euler）→ 中段位（rifleSwitchIkMidLocalPosition/Euler）
     /// → 回到标定位；grab/put 的离位/中段/回归时间窗取自原 clip 关键帧，见 PlayerMotionValuesSO。
     /// 非切换动画帧直接返回：常态由 Rifle_Normal_Ground_State.WriteRightHandCalibratedPose 维持标定值。
+    /// 手枪/手雷不启用本接管：掏/收动作简单，拔枪/持枪帧由各自状态每帧直接写标定值。
     /// </summary>
     void UpdateRightHandSwitchIkTarget()
     {
@@ -315,16 +327,20 @@ public class PlayerControllerScript : MonoBehaviour
         // 切换动画（Grab/Put Rifle，tag "Switching Weapon"）未播放 → 不接管（状态类写标定值）
         if (!context.TryGetWeaponSwitchAnimProgress(out float nt)) return;
 
-        // 判别收枪还是拔枪：机器在 SlotRifle 按下当帧即切到空手/步枪，动画层随后/同时播 Put/Grab Rifle
-        bool isPut = context.Handing == PlayerHanding.Unarmed;
+        // 判别收枪还是拔枪：机器在 SlotRifle 按下当帧即切到空手/步枪，动画层随后/同时播 Put/Grab Rifle。
+        // 收枪不能只看当前 Handing（收任何武器后都是 Unarmed），用切换前手持识别是否步枪收枪；
+        // 手枪/手雷不采用本接管（掏/收动作简单，拔枪/持枪帧由状态直接写标定值），在此排除。
         bool isGrab = context.Handing == PlayerHanding.Rifle;
-        if (!isPut && !isGrab) return;   // 其他武器切换（暂无）需另行扩展
+        bool isPutRifle = context.Handing == PlayerHanding.Unarmed
+                          && context.Motion.PreviousHanding == PlayerHanding.Rifle;
+        if (!isGrab && !isPutRifle) return;
 
         PlayerMotionValuesSO v = context.Values;
         float t = Mathf.Clamp01(nt);
 
         // 位置与旋转在原 clip 中的关键帧时间窗不同，分别采样（原 clip 关键帧间为 0 切线，
         // 离位段与回归段各用 SmoothStep 逼近）
+        bool isPut = isPutRifle;
         SwitchIkWindow posWin = isGrab ? v.grabSwitchPositionWindow : v.putSwitchPositionWindow;
         SwitchIkWindow rotWin = isGrab ? v.grabSwitchRotationWindow : v.putSwitchRotationWindow;
         float posF = SampleSwitchIkDip(t, posWin);
@@ -384,14 +400,20 @@ public class PlayerControllerScript : MonoBehaviour
         PlayerMotionValuesSO v = context.Values;
 
         // 持枪标定位：标定值（Chest 局部）还原到世界——按当前手持选择锚点：
-        // 手枪（Handing=Pistol）用 pistolRightHandAnchor*，其余（步枪）用 chestRightHandAnchor*
-        bool isPistol = context.Handing == PlayerHanding.Pistol;
+        // 手枪用 pistolRightHandAnchor*、手雷用 grenadeRightHandAnchor*、其余（步枪）用 chestRightHandAnchor*
+        PlayerHanding handing = context.Handing;
+        bool isPistol = handing == PlayerHanding.Pistol;
+        bool isGrenade = handing == PlayerHanding.Grenade;
         Vector3 holdAnchorLocalPos = isPistol
             ? v.pistolRightHandAnchorLocalPosition
-            : v.chestRightHandAnchorLocalPosition;
+            : isGrenade
+                ? v.grenadeRightHandAnchorLocalPosition
+                : v.chestRightHandAnchorLocalPosition;
         Quaternion holdAnchorLocalRot = Quaternion.Euler(isPistol
             ? v.pistolRightHandAnchorLocalEuler
-            : v.chestRightHandAnchorLocalEuler);
+            : isGrenade
+                ? v.grenadeRightHandAnchorLocalEuler
+                : v.chestRightHandAnchorLocalEuler);
 
         Transform anchor = twoBoneTarget.parent;
         Vector3 holdPos = anchor != null
@@ -451,6 +473,7 @@ public class PlayerControllerScript : MonoBehaviour
     /// 此处只做应用：写入轴点 worldRotation。
     /// 关键：双手 ChainIK target 与轴点写入使用【同一确定性旋转】——若在本处各自推进/
     /// 推算，两者会用到不同时点的旋转，导致"枪先转、手后算"的同帧错位穿模（已修复）。
+    /// 轴点按手持选择：步枪/手枪 → aimAxisPoint（肩部附近）；手雷 → grenadeAimAxisPoint（肘部附近）。
     /// 轴向语义：沿用原枪口装配约定（aimAxis=Z_NEG）——aimAxisNegZ=true 时让轴点 -Z 指向瞄准点。
     /// </summary>
     void LateUpdate()
@@ -459,7 +482,9 @@ public class PlayerControllerScript : MonoBehaviour
         LogBodyPostureTimeline();   // 临时调试：body posture 参数过渡时间线（Animator 求值后读取，确认后删除）
 
         if (context == null || !context.AimRigActive) return;
-        Transform pivot = context.AimAxisPoint;
+        Transform pivot = context.Handing == PlayerHanding.Grenade
+            ? context.GrenadeAxisPoint
+            : context.AimAxisPoint;
         if (pivot == null) return;
 
         pivot.rotation = context.AxisPointRotation;
@@ -592,6 +617,12 @@ public class PlayerControllerScript : MonoBehaviour
             case "PutPistol":
                 SwitchWeaponMount(Pistol, false, message); // 收手枪：切到收纳挂点
                 break;
+            case "GrabGrenade":
+                SwitchWeaponMount(Grenade, true, message);   // 拔手雷：切到使用中挂点
+                break;
+            case "PutGrenade":
+                SwitchWeaponMount(Grenade, false, message);  // 收手雷：切到收纳挂点
+                break;
             default:
                 Debug.LogWarning($"[WeaponEvent] 未处理的分发键：{message}", this);
                 break;
@@ -607,7 +638,7 @@ public class PlayerControllerScript : MonoBehaviour
         if (weaponRoot == null)
         {
             Debug.LogWarning(
-                $"[WeaponEvent] 武器事件 '{message}' 未找到武器根（Rifle/Pistol 字段未指派）",
+                $"[WeaponEvent] 武器事件 '{message}' 未找到武器根（Rifle/Pistol/Grenade 字段未指派）",
                 this);
             return;
         }
@@ -680,7 +711,11 @@ public class PlayerControllerScript : MonoBehaviour
                                     aimAxisOffset,
                                     RightHandWrist != null ? RightHandWrist.transform : null,
                                     Pistol != null ? Pistol.transform : null,
-                                    pistolAimAxisOffset);
+                                    pistolAimAxisOffset,
+                                    Grenade != null ? Grenade.transform : null,
+                                    grenadeAimAxisPoint,
+                                    grenadeAimAxisOffset,
+                                    Quaternion.Euler(grenadeAimAxisLocalEuler));
 
         // 状态注册（组合 → 状态类实例；工厂映射见 PlayerStateFactory。仅注册已实现的状态）
         machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
@@ -699,6 +734,12 @@ public class PlayerControllerScript : MonoBehaviour
             PlayerStateFactory.Create(PlayerHanding.Pistol, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping));
         machine.RegisterState(PlayerHanding.Pistol, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
             PlayerStateFactory.Create(PlayerHanding.Pistol, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground));
+        machine.RegisterState(PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            PlayerStateFactory.Create(PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Ground));
+        machine.RegisterState(PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping,
+            PlayerStateFactory.Create(PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping));
+        machine.RegisterState(PlayerHanding.Grenade, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
+            PlayerStateFactory.Create(PlayerHanding.Grenade, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground));
         machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Climbing,
             PlayerStateFactory.Create(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Climbing));
         machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.ClimbTopOut,
@@ -950,6 +991,93 @@ public class PlayerControllerScript : MonoBehaviour
             condition: ctx => ctx.Motion.VerticalVelocity < ctx.Values.airborneFallThreshold
                            || ctx.Motion.VerticalVelocity > ctx.Values.airborneRiseThreshold,
             label: "瞄准中走出边沿进入滞空（手枪）"));
+
+        // —— 手雷 ——
+        // ⑱ 信号边：空手按 3（SlotGrenade）→ 切换手雷（地面正常手部）。
+        //    条件阻塞：武器切换动画（Switching Weapon tag）播放期间禁止切换（与步枪 ④ 同规则）。
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            condition: ctx => !ctx.IsWeaponSwitchAnimPlaying(),
+            triggerSignal: PlayerInputState.Signal.SlotGrenade,
+            label: "切换手雷"));
+
+        // ⑱b 信号边：手雷地面再按 3（SlotGrenade）→ 收回手雷（切回空手）。
+        //    同样阻塞于武器切换动画（收回动画自身播放期间再按键无效）。
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            condition: ctx => !ctx.IsWeaponSwitchAnimPlaying(),
+            triggerSignal: PlayerInputState.Signal.SlotGrenade,
+            label: "收回手雷（回空手）"));
+
+        // ⑲ 信号边：手雷地面按 Jump → 起跳（需物理着地；与手枪 ⑫ 规则一致）
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping,
+            condition: ctx => ctx.IsGrounded,
+            triggerSignal: PlayerInputState.Signal.Jump,
+            label: "跳跃（手雷·地面起跳）"));
+
+        // ⑳ 请求边：手雷滞空 → 地面（落地；垂直速度 ≤ 判定阈值防起跳瞬间着地标志残留误判）
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping,
+            PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            condition: ctx => ctx.IsGrounded && ctx.Motion.VerticalVelocity <= ctx.Values.landingVerticalThreshold,
+            label: "落地（手雷）"));
+
+        // ㉑ 请求边：手雷地面 → 滞空（走出边沿：离地且垂直速度越过死区阈值；
+        //    条件与 Grenade_Normal_Ground_State 的提议一致）
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping,
+            condition: ctx => ctx.Motion.VerticalVelocity < ctx.Values.airborneFallThreshold
+                           || ctx.Motion.VerticalVelocity > ctx.Values.airborneRiseThreshold,
+            label: "走出边沿进入滞空（手雷）"));
+
+        // —— 手雷瞄准（骨架：弧线/偏航求解后续接入，当前枪口方向 = 角色 yaw × 相机 pitch）——
+        // ㉒ 按住模式（持久边）：按住 Aim 进入、松开退出
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            PlayerHanding.Grenade, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
+            condition: ctx => !ctx.Values.aimToggleMode && ctx.Input.Aim,
+            evaluateEveryFrame: true,
+            label: "手雷·按住瞄准"));
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Grenade, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
+            PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            condition: ctx => !ctx.Values.aimToggleMode && !ctx.Input.Aim,
+            evaluateEveryFrame: true,
+            label: "手雷·松开瞄准"));
+        //    切换模式（信号边）：按一次 Aim 进瞄准、再按一次退出
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            PlayerHanding.Grenade, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
+            condition: ctx => ctx.Values.aimToggleMode,
+            triggerSignal: PlayerInputState.Signal.AimPressed,
+            label: "手雷·切换瞄准（进）"));
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Grenade, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
+            PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Ground,
+            condition: ctx => ctx.Values.aimToggleMode,
+            triggerSignal: PlayerInputState.Signal.AimPressed,
+            label: "手雷·切换瞄准（出）"));
+
+        // ㉖ 信号边：手雷瞄准中按 Jump → 取消瞄准并起跳（与步枪 ⑥ 同规则）
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Grenade, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
+            PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping,
+            condition: ctx => ctx.IsGrounded,
+            triggerSignal: PlayerInputState.Signal.Jump,
+            label: "跳跃（手雷瞄准中·取消瞄准）"));
+
+        // ㉗ 请求边：手雷瞄准中走出边沿 → 切滞空正常手部（瞄准无滞空组合，切换即取消瞄准）
+        machine.RegisterEdge(new TransitionEdge(
+            PlayerHanding.Grenade, PlayerHandPosture.Aiming, PlayerBodyPosture.Ground,
+            PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping,
+            condition: ctx => ctx.Motion.VerticalVelocity < ctx.Values.airborneFallThreshold
+                           || ctx.Motion.VerticalVelocity > ctx.Values.airborneRiseThreshold,
+            label: "瞄准中走出边沿进入滞空（手雷）"));
 
         // 进入初始状态（地面）
         machine.Enter(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Ground, context);
