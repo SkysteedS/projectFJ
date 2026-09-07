@@ -34,6 +34,15 @@
 3. **再询问**：用文字询问用户是否执行 git 提交/推送，得到明确答复后再操作；不得直接申请提权或直接推送。
 - 环境建议：Codex 权限模式请使用“请求批准”（Ask for approval）；自动审批（Auto-review）模式下，git 提权请求可能被阻塞。
 
+## Git 工具执行方式
+
+- **本地操作用系统 git**：`git add` / `git commit`（含 `status` / `log` / `diff` / `checkout` /
+  `merge --ff-only` 等不触网操作）一律直接使用本地 git 指令执行，不经过 TortoiseGit、无需代理。
+- **远端操作统一走 TortoiseGit**：`push` / `fetch` / `pull` / `ls-remote` 等触网操作一律通过
+  TortoiseGit 命令行（`TortoiseGitProc.exe`）执行，走 TortoiseGit 内部配置好的代理，避免直连网络问题。
+- **执行远端操作前先提示**：先向用户说明将要执行的远端操作，并请用户确认代理已开启；确认后再执行。
+- 若 TortoiseGit 不可用或代理未开启导致远端操作失败：停下来向用户说明并等待，不得擅自改用其它网络方式绕过。
+
 ## 工作约定
 
 - 开发引擎：Unity 2022.3.62f3c1（URP）。
