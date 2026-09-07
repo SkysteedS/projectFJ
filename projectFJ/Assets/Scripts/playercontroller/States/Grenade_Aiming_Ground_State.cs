@@ -29,7 +29,8 @@ using UnityEngine.Animations.Rigging;
 ///   （PlayerControllerScript.LateUpdate 应用），手雷根作为子级自动跟随，不使用 Multi-Aim 约束。
 /// - 双手：进入瞬间捕获"腕-枪"相对位姿，每帧按手雷根当前位姿推算并写入左右手 ChainIK target。
 /// - 退出：把手雷根设回进入前父级（优先 RightHandWrist）并恢复 local TRS，交还动画系统。
-/// - 弧线预览（真实抛物线 + 地形采样）已接入；抛掷偏航（让真实落点对准视线射线）仍待后续接入。
+/// - 弧线预览（真实抛物线 + 地形采样）已接入（实现在独立工具类 GrenadeArcPreview，本状态只做生命周期调用）；
+///   抛掷偏航（让真实落点对准视线射线）仍待后续接入。
 ///   当前稳定期手雷朝向方向 = 角色 yaw × 相机 pitch（GrenadeFrontTarget 占位），只让手肘传递俯仰。
 /// </summary>
 public class Grenade_Aiming_Ground_State : PlayerStateBase
@@ -45,20 +46,6 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
     static readonly float FallbackAxisHeight = 1.2f;
     /// <summary>相机水平分量下限：相机近垂直（朝天/朝地）时回退纯角色 forward，防 NaN。</summary>
     static readonly float MinCameraHorizLen = 1e-4f;
-    /// <summary>弧线折角圆滑顶点数（LineRenderer.numCornerVertices）。</summary>
-    static readonly int ArcCornerVertices = 4;
-    /// <summary>弧线端点圆帽顶点数（LineRenderer.numCapVertices）。</summary>
-    static readonly int ArcCapVertices = 4;
-    /// <summary>弧线显示采样点数下限（防 positionCount < 2）。</summary>
-    static readonly int MinArcSampleCount = 2;
-    /// <summary>落点粗采样步长（s）：先稀疏探测"接近地面"区间，再做细步精化，减少每帧垂直射线数。</summary>
-    static readonly float ArcCoarseStep = 0.1f;
-    /// <summary>高空跳过探测的保守余量（m）：采样点高于已知地面超过"探测范围 + 余量"时跳过垂直射线。</summary>
-    static readonly float ArcProbeSkipMargin = 1f;
-    /// <summary>探测最大步数下限（防 Inspector 误配 0/负值）。</summary>
-    static readonly int MinDetectSteps = 1;
-    /// <summary>显示采样点数上限（防 Inspector 误填超大值撑爆缓存）。</summary>
-    static readonly int ArcDisplayMaxSamples = 256;
     #endregion
 
     float currentSpeed;         // 档位速度（走/跑 × 输入模长，跨帧平滑；瞄准轴投影的基准）
@@ -82,16 +69,9 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
     float rigTransitionRemaining;       // 过渡剩余时间；>0 = 仍在进瞄准插值阶段
     float rigTransitionDuration;        // 本次过渡总时长（进入时锁定）
 
-    #region 弧线预览（状态字段）
-    LineRenderer arcRenderer;           // 弧线预览渲染器（手雷根子物体，场景装配；状态内 Get）
-    Vector3[] arcSamplePoints = new Vector3[ArcDisplayMaxSamples];   // 显示采样缓存（防每帧 GC）
-    BulletManage bulletManage;          // 投掷初速数据源（手雷上的 BulletManage；bulletData.bulletInitialSpeed）
-    bool bulletDataWarned;              // 初速数据缺失时只告警一次
-    float arcShowTimer;                 // 显示延迟计时（进入瞄准后开始倒计时）
-    float arcFadeAlpha;                 // 当前弧线 alpha（淡入推进 0..1）
-    Gradient arcBaseGradient;           // 进入时缓存的用户配色（淡入只缩 alpha，不动色相）
-    Gradient arcFadeGradient = new Gradient();   // 复用实例，避免每帧 alloc
-    #endregion
+    // 弧线预览：独立工具类（渲染器管理/落点探测/淡入全在其内部，见 GrenadeArcPreview）；
+    // 本状态只负责按生命周期调用 Enter/Tick/Exit，不持有任何弧线字段
+    readonly GrenadeArcPreview arcPreview = new GrenadeArcPreview();
 
     // 头/胸引导沿用瞄准约定：目标 = 视线远点（相机 forward × aimMissPointDistance）；
     // 手雷朝向（轴点）方向见 UpdateAimTargets / GrenadeFrontTarget：稳定期占位 = 角色 yaw × 相机 pitch，
@@ -148,21 +128,8 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
         // 瞄准方向=视线远点，无跳变平滑字段）
         UpdateAimTargets(ctx);
 
-        // 弧线预览渲染器（手雷根子物体）：进入瞄准时取引用并准备世界空间采样写入
-        arcRenderer = ctx.GrenadeRoot != null ? ctx.GrenadeRoot.GetComponentInChildren<LineRenderer>(true) : null;
-        // 投掷初速数据源：手雷上的 BulletManage（不把初速放进运动数值资产）
-        bulletManage = ctx.GrenadeRoot != null ? ctx.GrenadeRoot.GetComponentInChildren<BulletManage>(true) : null;
-        if (arcRenderer != null)
-        {
-            arcRenderer.useWorldSpace = true;
-            arcRenderer.numCornerVertices = ArcCornerVertices;   // 折角圆滑（部分版本不在 Inspector 暴露，脚本统一设置）
-            arcRenderer.numCapVertices = ArcCapVertices;         // 端点圆帽
-            arcRenderer.positionCount = 0;
-            arcRenderer.enabled = false;   // 过渡/延迟期间先不显示
-            arcBaseGradient = arcRenderer.colorGradient;
-            arcShowTimer = ctx.Values.grenadeArcShowDelay;
-            arcFadeAlpha = 0f;
-        }
+        // 弧线预览：查找渲染器并准备世界空间采样与淡入状态（实现见 GrenadeArcPreview）
+        arcPreview.Enter(ctx);
     }
 
     public override void Exit(PlayerContext ctx)
@@ -172,14 +139,7 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
         RestoreAimRig(ctx);
 
         // 退出瞄准：清空弧线预览
-        if (arcRenderer != null)
-        {
-            arcRenderer.positionCount = 0;
-            arcRenderer.enabled = false;
-            arcRenderer = null;
-            arcBaseGradient = null;
-            arcFadeAlpha = 0f;
-        }
+        arcPreview.Exit();
     }
 
     public override void Tick(PlayerContext ctx)
@@ -192,8 +152,8 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
         // 每帧把头/胸约束的目标移到相机瞄准点（手雷朝向方向由 GunAimPoint 驱动轴点旋转，见 TickAxisRotation）
         UpdateAimTargets(ctx);
 
-        // 抛物线解析 + 地形采样 → 写入弧线预览
-        UpdateArcPreview(ctx);
+        // 弧线预览：抛物线解析 + 地形采样 + 淡入（独立工具类，见 GrenadeArcPreview）
+        arcPreview.Tick(ctx, rigHeld, rigTransitionRemaining > 0f);
 
         RotateTowardCameraForward(ctx);
 
@@ -237,198 +197,6 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
         WriteAnimatorParams(ctx);
     }
 
-    #endregion
-
-    #region 弧线预览（弹道解析与渲染管理）
-    /// <summary>
-    /// 抛物线解析 + 地形采样（弧线预览）：
-    /// 起点 = 轴点 + rigAxisRotation × local offset（暂不考虑手雷 localRotation）；
-    /// 落点探测 = 粗采样（ArcCoarseStep）定位落地区间 → Values.grenadeArcDetectTimeStep 精化截断；
-    /// 找到真实飞行终点后，再按
-    /// PlayerMotionValuesSO.grenadeArcSampleCount 在 0..落点时间 间均匀重采样，点数只影响平滑度。
-    /// 初速 = 手雷 BulletManage.bulletData.bulletInitialSpeed，重力沿用 Values.gravity。
-    /// </summary>
-    void UpdateArcPreview(PlayerContext ctx)
-    {
-        if (arcRenderer == null || !rigHeld || rigPivot == null) return;
-
-        // 显示节奏：手雷根过渡期与短暂延迟内不绘制（避免手臂尚未到位时弧线乱摆/突兀出现）
-        if (rigTransitionRemaining > 0f)
-        {
-            arcRenderer.enabled = false;
-            return;
-        }
-        if (arcShowTimer > 0f)
-        {
-            arcShowTimer -= Time.deltaTime;
-            arcRenderer.enabled = false;
-            return;
-        }
-
-        // 起点：轴点位置 + 当前确定性旋转 × local offset
-        Vector3 origin = rigPivot.position + rigAxisRotation * rigOffset;
-
-        // 初速方向：轴点瞄准轴（aimAxisNegZ=true → 轴点 -Z 指向瞄准点）
-        Vector3 dir = ctx.Values.aimAxisNegZ
-            ? -(rigAxisRotation * Vector3.forward)
-            : rigAxisRotation * Vector3.forward;
-        float speed = 0f;
-        if (bulletManage != null && bulletManage.bulletData != null)
-        {
-            speed = bulletManage.bulletData.bulletInitialSpeed;
-        }
-        float g = -ctx.Values.gravity;   // gravity 为负（向下），此处取正数幅度
-        if (speed <= 0f && !bulletDataWarned)
-        {
-            bulletDataWarned = true;
-            Debug.LogWarning(
-                "[GrenadeArc] 未取得投掷初速：请在手雷上挂 BulletManage 并指派 bulletData（bulletInitialSpeed > 0）",
-                ctx.Transform);
-        }
-        if (speed <= 0f || dir.sqrMagnitude < MinAimDirSqr)
-        {
-            arcRenderer.positionCount = 0;
-            arcRenderer.enabled = false;
-            return;
-        }
-        dir.Normalize();
-
-        // 1) 落点探测（粗采样定位落地区间 → 细步精化截断）：
-        //    相比全程细步采样，显著减少每帧垂直射线数量，见 TryFindArcLanding
-        bool landed = false;
-        Vector3 landPoint = default;
-        float endTime = ArcCoarseStep * Mathf.Max(MinDetectSteps, ctx.Values.grenadeArcDetectMaxSteps);
-        if (TryFindArcLanding(ctx, origin, dir, speed, g, out float landTime, out landPoint))
-        {
-            landed = true;
-            endTime = landTime;
-        }
-
-        // 2) 显示采样：按调试参数在 0..endTime 间均匀取点（数量 = 平滑度）
-        int count = Mathf.Clamp(ctx.Values.grenadeArcSampleCount, MinArcSampleCount, ArcDisplayMaxSamples);
-        arcSamplePoints[0] = origin;
-        for (int i = 1; i < count; ++i)
-        {
-            float tt = endTime * (i / (float)(count - 1));
-            arcSamplePoints[i] = SampleArcPoint(origin, dir, speed, g, tt);
-        }
-        if (landed)
-        {
-            arcSamplePoints[count - 1] = landPoint;   // 终点钉在地面命中点
-        }
-
-        arcRenderer.positionCount = count;
-        arcRenderer.SetPositions(arcSamplePoints);
-
-        // 淡入：alpha 从 0 平滑升到 1（时长 = Values.grenadeArcFadeInTime），只缩透明度不改用户配色
-        arcRenderer.enabled = true;
-        if (arcFadeAlpha < 1f)
-        {
-            float fadeTime = Mathf.Max(MinRigTransitionDuration, ctx.Values.grenadeArcFadeInTime);
-            arcFadeAlpha = Mathf.Min(1f, arcFadeAlpha + Time.deltaTime / fadeTime);
-            ApplyArcAlpha(arcFadeAlpha);
-        }
-    }
-
-    /// <summary>解析抛物线采样点：p(t) = origin + dir·v·t + ½g·t²（向下）。探测与显示共用。</summary>
-    static Vector3 SampleArcPoint(Vector3 origin, Vector3 dir, float speed, float g, float t)
-        => origin + dir * (speed * t) + Vector3.down * (0.5f * g * t * t);
-
-    /// <summary>从采样点上方下投垂直射线，返回地面命中点；无命中返回 false。</summary>
-    static bool ProbeGroundBelow(PlayerContext ctx, Vector3 p,
-                                 float probeUp, float probeDist, out Vector3 ground)
-    {
-        ground = default;
-        Vector3 probeOrigin = p + Vector3.up * probeUp;
-        if (Physics.Raycast(probeOrigin, Vector3.down, out RaycastHit hit,
-                            probeDist, ctx.Values.aimRayMask))
-        {
-            ground = hit.point;
-            return true;
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// 落点探测（优化版）：
-    /// 1) 起点下方探测一次，作为"已知地面高度"基准；
-    /// 2) 按 ArcCoarseStep 粗采样；采样点远高于已知地面时直接跳过垂直射线（高抛中段零查询）；
-    /// 3) 粗采样命中"低于地面 + 容差"后，用 Values.grenadeArcDetectTimeStep 在上一个粗采样点
-    ///    与命中点之间精化出首个截断点。
-    /// </summary>
-    bool TryFindArcLanding(PlayerContext ctx, Vector3 origin, Vector3 dir, float speed, float g,
-                           out float landTime, out Vector3 landPoint)
-    {
-        landTime = 0f;
-        landPoint = default;
-
-        float probeUp = ctx.Values.grenadeArcGroundProbeUp;
-        float probeDist = ctx.Values.grenadeArcGroundProbeDistance;
-        float tolerance = ctx.Values.grenadeArcLandingTolerance;
-        int maxCoarse = Mathf.Max(MinDetectSteps, ctx.Values.grenadeArcDetectMaxSteps);
-        float skipThreshold = probeUp + probeDist + ArcProbeSkipMargin;
-
-        // 基准地面：起点正下方探测一次
-        bool groundKnown = false;
-        float lastGroundY = origin.y;
-        if (ProbeGroundBelow(ctx, origin, probeUp, probeDist, out Vector3 originGround))
-        {
-            groundKnown = true;
-            lastGroundY = originGround.y;
-        }
-
-        for (int s = 1; s <= maxCoarse; ++s)
-        {
-            float t = s * ArcCoarseStep;
-            Vector3 p = SampleArcPoint(origin, dir, speed, g, t);
-
-            // 高空跳过：当前点远高于已知地面，垂直射线必然够不到地面
-            if (groundKnown && p.y - lastGroundY > skipThreshold) continue;
-
-            if (!ProbeGroundBelow(ctx, p, probeUp, probeDist, out Vector3 ground)) continue;
-            groundKnown = true;
-            lastGroundY = ground.y;
-
-            if (p.y > ground.y + tolerance) continue;
-
-            // 精化：在上一个粗采样点与当前命中点之间按细步长找首个低于地面的点
-            float fineStart = Mathf.Max(0f, t - ArcCoarseStep);
-            float fineStep = Mathf.Max(MinRigTransitionDuration, ctx.Values.grenadeArcDetectTimeStep);
-            for (float tt = fineStart; tt <= t + fineStep; tt += fineStep)
-            {
-                Vector3 ps = SampleArcPoint(origin, dir, speed, g, tt);
-                if (ProbeGroundBelow(ctx, ps, probeUp, probeDist, out Vector3 gs)
-                    && ps.y <= gs.y + tolerance)
-                {
-                    landTime = tt;
-                    landPoint = gs;
-                    return true;
-                }
-            }
-
-            // 兜底：精化未命中时用粗采样命中点本身
-            landTime = t;
-            landPoint = ground;
-            return true;
-        }
-        return false;
-    }
-
-    /// <summary>把用户配色按当前 alpha 写入渲染器：淡入只缩 alpha 通道，不动色相/宽度曲线。</summary>
-    void ApplyArcAlpha(float alpha)
-    {
-        if (arcBaseGradient == null || arcRenderer == null) return;
-
-        arcFadeGradient.mode = arcBaseGradient.mode;
-        GradientColorKey[] colors = arcBaseGradient.colorKeys;
-        GradientAlphaKey[] alphas = arcBaseGradient.alphaKeys;
-        for (int i = 0; i < alphas.Length; ++i)
-        {
-            alphas[i].alpha *= alpha;
-        }
-        arcFadeGradient.SetKeys(colors, alphas);
-        arcRenderer.colorGradient = arcFadeGradient;
-    }
     #endregion
 
     #region 瞄准目标与轴点旋转（约束目标位置、确定性旋转推进）

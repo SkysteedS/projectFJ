@@ -28,6 +28,7 @@
 | 走廊状态基类 | 暂不定义：`IsTransient` 预留缺口已随死代码清理移除，登顶/翻越实现时再引入走廊状态类与基类标记 | [已确认] |
 | 手持类别建模 | 作为**装备数据**（枚举+能力声明），非状态机 | [待确认—已推荐] |
 | 程序化 IK target 写入权威 | **脚本唯一权威**：武器地面态每帧写各自标定值；不做 Enter/Exit 还原（还原写回场景默认位 = 旧 Write Defaults 同类表现）；rifle grab/put 的中段轨迹由主体类按动画进度接管 | [已确认 2026-09-06] |
+| 状态类继承结构（多态树） | C# 单继承下类 DAG 不可行；采用**线性化逐层继承**：Player → BodyPosture（族基类）→ HandPosture（手部变体基类）→ Handing（具体组合状态类）。**所有使用的组合状态类一律落在 Handing 层**（Climbing/TopOut 单例同规则）；正交合法性仍由状态键/工厂/边表编码，中间层仅实现复用，不改机器 API | [已确认 2026-09-07] |
 
 ## 3. 总体架构
 
@@ -238,32 +239,123 @@ machine.RegisterState(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBod
 
 插入 `TopOut`：BodyPosture 加枚举行 + 新增状态类 + 工厂加一行映射 + 注册 `((Unarmed, Normal, Climbing) → (Unarmed, Normal, TopOut))` 与 `((Unarmed, Normal, TopOut) → (Unarmed, Normal, Ground))` 边 + Climbing 状态类到顶处一行 `RequestTransition`。其余状态零改动。
 
-### 6.7 地面/滞空复用提炼计划（Pistol 与 Grenade 已落地，提炼尚未实施）
+### 6.7 状态类继承链迁移计划（Player → BodyPosture → HandPosture → Handing · 2026-09-07 定稿）
 
-**动机**：`Unarmed/Rifle × Normal × Ground/Jumping` 目前是"同一套地面/滞空逻辑 + 武器差异"的
-复制实现：武器切换速度插值、落地过渡、转向、WriteAnimatorParams 在 Unarmed 与 Rifle 各存一份；
-滞空（惯性 + 手写重力 + 落地判定）两把武器几乎逐行相同。直接新增 Pistol/Grenade 会把同样代码
-再复制两遍。因此在 Pistol/Grenade 落地【之后】统一做一次提炼，避免先抽象、后实现时两处返工。
+**背景与动机**：Pistol/Grenade 落地后，地面/滞空/瞄准三类流程都出现整段复制——
+4 个 Normal×Ground、4 个 Normal×Jumping、3 个 Aiming×Ground 的主体逻辑逐字相同，差异仅集中在
+武器档位/IK 锚点/根引用等"手持差异"。原 §6.7（已废弃）只规划两个基类、把 Aiming 与
+Climbing/TopOut 划出模板；现在三份瞄准已落地、两把武器复制成四份，复用边界需扩大到全部状态类。
+C# 类仅支持单继承，无法用类 DAG 表达"同时继承 Normal 与 Ground"；正交关系改由
+**线性化逐层继承**表达（见 §2 决策记录），组合合法性仍由状态键/工厂/边表编码，不进入类层级。
 
-**目标结构（保持"一个组合 = 一个状态类 + 工厂映射"不变）**：
+**层级定义**：
 
-1. `GroundStateBase`（States/ 下）：收走两份地面状态共有的状态字段与流程——落地过渡
-   （landingFallBlend/landingBlendTimer/active）、武器切换速度插值（weaponSwitchBlend*）、
-   旋转（RotateTowardMoveDirection）、常规 WriteAnimatorParams；差异点向下暴露：
-   - 速度档位：数值层提供按 Handing 的档位查询（走/跑目标速度 + 是否可跑），或子类覆写
-     `WalkSpeed/RunSpeed/CanRun`（Pistol/Grenade 可跑，Unarmed/Rifle 各档位不变；Grenade 另声明
-     左手不写 IK，瞄准暂不接入）；
-   - 目标组合：请求边/信号边仍由机器注册，状态类自身不持有切换表。
-2. `NormalJumpingStateBase`：收走滞空惯性/重力/落地判定/WriteAnimatorParams；
-   具体子类（Unarmed/Rifle/Pistol）只提供"落回哪个 Handing 组合"。
-3. `RotateTowardMoveDirection` 与常规参数写入若已收进基类，具体状态类只剩差异声明，
-   单文件理解成本下降；地面/滞空类预期均可降到 100~150 行内。
+| 层 | 类 | 职责 |
+|---|---|---|
+| Player | `PlayerStateBase` | 状态契约 + 仅跨 ≥2 个 Body 族的纯工具（如非瞄准三参数写入） |
+| BodyPosture | `GroundStateBase` / `JumpingStateBase` / `ClimbingStateBase` / `ClimbTopOutStateBase` | 该身体姿态族的公共字段与流程（单例族 = 行为宿主，方案 A） |
+| HandPosture | `NormalGroundStateBase` / `AimingGroundStateBase` / `NormalJumpingStateBase` / `NormalClimbingStateBase` / `NormalClimbTopOutStateBase` | 该族 × 手部操作的差异流程/字段（未来 Pulling/Pushing 同层新增） |
+| Handing | `Unarmed/Rifle/Pistol/Grenade_..._State` | 具体组合状态类：身份 + 手持差异声明（IK/特例/进入语义） |
 
-**边界（不进入模板）**：Aiming（2D 轴速度/轴点旋转/双手 ChainIK）、Climbing/TopOut（走廊状态），
-保持各自独立；拔/收枪切换的 target 轨迹协调继续留在主体类。
+**继承规则（定稿）**：
 
-**约束与验收**：只做机械上提，不改变行为；完成后 Unarmed/Rifle 跑、跳、落地、切换速度插值
-回归一致（对照现行为）；提炼完成后 Pistol/Grenade 不再复制移动逻辑，仅声明差异。
+1. 所有被使用的具体组合状态类一律落在 Handing 层：继承链统一为
+   `PlayerStateBase → BodyPosture 族基类 → HandPosture 变体基类 → 具体状态类`。
+   Climbing / TopOut 目前虽是单例（仅 Unarmed×Normal），同样不得直接继承 PlayerStateBase
+   （结构一致性要求）。
+2. 归属原则：只被一个 Body 族使用的内容放到该族/其下；只被一个 HandPosture 变体使用的内容
+   放到该变体；只有真正跨 ≥2 个 Body 族的方法留在 Player 层。
+3. 允许 HandPosture/Handing 层暂时为"身份叶 / 结构锚点"（无成员、空覆写）——它们是手部变体
+   与武器差异的扩展点，也是"所有状态同层"语义的占位；实现评审不得以"空类无用"删除该层。
+4. 推/拉（后续）：在 `GroundStateBase`（BodyPosture）下新增 `PullingGroundStateBase` /
+   `PushingGroundStateBase`（HandPosture）及其 Handing 叶子即可，既有结构零改动。
+
+**完整继承树**：
+
+```csharp
+PlayerStateBase（契约 + 跨族纯工具）
+├── GroundStateBase                    // BodyPosture·地面族
+│   ├── NormalGroundStateBase          // HandPosture·手部 = Normal
+│   │   ├── Unarmed_Normal_Ground_State    // Handing
+│   │   ├── Rifle_Normal_Ground_State
+│   │   ├── Pistol_Normal_Ground_State
+│   │   └── Grenade_Normal_Ground_State
+│   ├── AimingGroundStateBase          // HandPosture·手部 = Aiming
+│   │   ├── Rifle_Aiming_Ground_State
+│   │   ├── Pistol_Aiming_Ground_State
+│   │   └── Grenade_Aiming_Ground_State
+│   └── （扩展预留）PullingGroundStateBase / PushingGroundStateBase → Handing
+├── JumpingStateBase                   // BodyPosture·滞空族
+│   └── NormalJumpingStateBase         // HandPosture（当前仅 Normal 一支）
+│       ├── Unarmed_Normal_Jumping_State
+│       ├── Rifle_Normal_Jumping_State
+│       ├── Pistol_Normal_Jumping_State
+│       └── Grenade_Normal_Jumping_State
+├── ClimbingStateBase                  // BodyPosture·攀爬族（当前单例，行为宿主）
+│   └── NormalClimbingStateBase        // HandPosture
+│       └── Unarmed_Normal_Climbing_State   // Handing
+└── ClimbTopOutStateBase               // BodyPosture·登顶走廊族（当前单例，行为宿主）
+    └── NormalClimbTopOutStateBase     // HandPosture
+        └── Unarmed_Normal_ClimbTopOut_State // Handing
+```
+
+**从 Player 层回收的内容**（此前直接拔高到 PlayerStateBase、需由继承链收回掌控权）：
+
+| 现有成员 | 现状使用方 | 回收去向 |
+|---|---|---|
+| `CameraForward` / `CameraRight` | 仅 Ground 族（Normal 间接、Aiming 直接） | `GroundStateBase`（protected static） |
+| `CameraSpaceMoveDir` | 仅 Normal×Ground×4 | `GroundStateBase`（protected static） |
+| `MoveDirection`（含写 `ctx.Motion.HorizontalDir` 的松键保向语义） | 仅 Normal×Ground×4 | `GroundStateBase`（protected static） |
+
+**拔高清单（按层归属）**：
+
+1. Player 层：保留契约 `Enter / Exit / Tick / OnAnimatorMove`；新增
+   `protected static WriteNonAimSpeedParams(ctx, forwardSpeed, fallingSpeed)`（NormalGround 与
+   Jumping 两族共用的非瞄准三参数写入）；相机轴/移动方向辅助全部下放，不再承载族逻辑。
+2. `GroundStateBase`：回收 CameraForward / CameraRight / CameraSpaceMoveDir / MoveDirection；
+   `protected static NextGroundVertical(ctx, currentVertical, dt)`（贴地压速 vs ApplyGravity）；
+   `protected bool TryRequestAirborneExit(ctx, float vertical)`（离地越界守卫 + 提议
+   `(ctx.Handing, Normal, Jumping)`，与机器请求边条件收敛为同源判定）；`override OnAnimatorMove`
+   （根运动水平 + 手写垂直）；不写 Enter/Tick 模板（Normal 与 Aiming 流程阶段顺序不同）。
+3. `JumpingStateBase`：字段 `horizontalVelocity`；`Enter`（惯性捕获 + IsGrounded → JumpSpeed）；
+   `Tick`（落地提议 → 重力 → Motion 写回 → WriteNonAimSpeedParams）；`OnAnimatorMove`
+   （全量 Velocity）；当前无差异缝。
+4. `ClimbingStateBase` / `ClimbTopOutStateBase`：以当前唯一实现为基线整体承载攀爬/登顶族
+   字段与流程（方案 A），HandPosture/Handing 层为空锚点。
+5. `NormalGroundStateBase`：
+   - 字段：landingFallBlend / landingBlendTimer / landingBlendActive；
+     weaponSwitchBlendTimer / StartSpeed / Active / AnimDriven；
+   - `Enter` 公共三段：落地交接捕获 → HandingChanged 消费并启动切枪插值 → 贴地压速；
+   - `Tick` 骨架：`WriteHands(ctx)`（虚缝，默认空）→ RotateTowardMoveDirection →
+     档位目标（数值层按 Handing 查询）→ 切枪动画同步插值或 MoveGroundSpeed →
+     NextGroundVertical → Motion 写回 → TryRequestAirborneExit → 地面参数写入；
+   - 手 IK 写入辅助（protected，`ref bool warnOnce` 告警一次 + 武器子物体免写判断）：
+     `WriteRightHandCalibratedPose(ctx, localPos, localEuler, ref warnOnce)`、
+     `WriteLeftHandGripPose(ctx, weaponRoot, anchorPos, anchorEuler, ref warnOnce)`；
+   - 虚缝：`protected virtual void WriteHands(PlayerContext ctx) { }`。
+6. `AimingGroundStateBase`：
+   - 字段上移：两轴速度/yaw 平滑、rig*（root/pivot/offset/saved*/held/transition*/start*）、
+     腕位捕获与重锁系列、rigAxisRotation、结构常量（含相机水平下限 `MinCameraHorizLen` 归一）；
+   - 公共方法与骨架：Enter / Exit / Tick / TickAimRigTransition / CaptureHandOffsets /
+     UpdateHandTargets / TickAxisRotation / AimFrontTarget / RotateTowardCameraForward /
+     OnAnimatorMove / WriteAnimatorParams；
+   - 虚缝（Handing 层覆写）：`AimWeaponRoot` / `AimPivot` / `AimAxisOffset` /
+     `AimLocalRotation`（默认 identity；Grenade 覆写）/ `AlwaysAimToFront`（Grenade = true）/
+     `OnPostAimTargetsUpdated`（Grenade 调 GrenadeArcPreview）。
+7. Handing 层叶子差异：
+   - Normal×Ground：`WriteHands` 覆写（Unarmed 空；Rifle/Pistol 左护木+右手标定；
+     Grenade 仅右手标定+全 0 守卫）；
+   - Aiming×Ground：各解析缝 + Grenade 弧线（arcPreview 字段留在 Grenade 叶子）；
+   - Jumping / Climbing / TopOut：纯身份叶（结构一致性占位）。
+8. 数值层：`MoveUnarmed/Rifle/Pistol/GrenadeSpeed` + 状态内重复的 targetSpeed 公式 →
+   按 PlayerHanding 档位查询 + 单一 `MoveGroundSpeed`；`MoveAimSpeed` 现值（步枪档跨武器）
+   迁移期间维持不变（语义见 §10）。
+
+**边界与不变项**：工厂/状态机/边表/PlayerContext/交接语义不变；PlayerStateKey 仍仅机器内部；
+拔/收枪 target 轨迹协调留在主体类；纯机械上提 + 语义占位，不做行为变化。
+
+**迁移方式与验收**：一次性完成全部四层迁移（不落中间态）；迁移前对当前实现做 git 检查点备份；
+静态核对后整体编译 + 行为回归（跑/跳/落地/切枪插值/瞄准/攀爬/登顶/弧线淡入对照迁移前）。
 
 ### 6.8 程序化 IK 的写入权威与 target 生命周期（2026-09-06 定稿）
 
@@ -311,14 +403,20 @@ Assets/playercontroller/
 ├── PlayerMotion.cs             共享运动描述（跨状态交接槽，纯数据）          [已实现]
 ├── PlayerMotionValuesSO.cs     运动数值资产（物理常量 + 纯计算函数；资产级单例）[已实现]
 ├── Editor/PlayerMotionValuesSOEditor.cs   SO 分组折叠 Inspector          [已实现]
-├── States/  （一个状态 = 一个完整组合类）
-│   ├── PlayerStateBase.cs              [已实现]
+├── States/  （Handing 层 = 一个组合一个具体状态类；BodyPosture/HandPosture 层见 §6.7）
+│   ├── PlayerStateBase.cs              [已实现·Player 层]
+│   ├── （BodyPosture 层 · 本次迁移新增，见 §6.7）
+│   │    GroundStateBase.cs / JumpingStateBase.cs / ClimbingStateBase.cs / ClimbTopOutStateBase.cs
+│   ├── （HandPosture 层 · 本次迁移新增，见 §6.7）
+│   │    NormalGroundStateBase.cs / AimingGroundStateBase.cs / NormalJumpingStateBase.cs /
+│   │    NormalClimbingStateBase.cs / NormalClimbTopOutStateBase.cs
 │   ├── Unarmed_Normal_Ground_State.cs  [已实现]
 │   ├── Rifle_Normal_Ground_State.cs    [已实现]
 │   ├── Pistol_Normal_Ground_State.cs   [已实现]
 │   ├── Grenade_Normal_Ground_State.cs  [已实现]
 │   ├── Rifle_Aiming_Ground_State.cs    [已实现]
 │   ├── Pistol_Aiming_Ground_State.cs   [已实现]
+│   ├── Grenade_Aiming_Ground_State.cs  [已实现]
 │   ├── Rifle_Normal_Jumping_State.cs   [已实现]
 │   ├── Pistol_Normal_Jumping_State.cs  [已实现]
 │   ├── Grenade_Normal_Jumping_State.cs [已实现]
@@ -327,6 +425,7 @@ Assets/playercontroller/
 │   └── Unarmed_Normal_ClimbTopOut_State.cs [已实现·走廊状态]
 ├── WallProbe.cs                墙面探测工具（自 test.cs 平移，零依赖）
 ├── GroundProbe.cs              着地去抖探测工具（替代 CharacterController.isGrounded）
+├── GrenadeArcPreview.cs        手雷弧线预览工具（抛物线解析/地形采样/淡入；独立于状态类）[已实现]
 └── （动画参数哈希）            集中于 PlayerControllerScript 顶部静态常量（Anim*）
 ```
 
@@ -355,6 +454,7 @@ Assets/playercontroller/
 | Phase 3 | 状态机（扁平单机：组合状态枚举 + 单字典单边表 + 三种转换边） | **架构已完成**：合法组合状态类全部落地并注册（含 Unarmed/Rifle/Pistol/Grenade 的地面、滞空与瞄准组合）；状态内运动逻辑已完成，非法组合天然不可达 |
 | Phase 4 | 主体类重组、回调桥接、场景接入 | 输入桥接已完成；场景接入待 Unity 侧 |
 | Phase 5 | 回归验证（对照 test.cs 行为） | 待 Phase 3/4 |
+| Phase 6 | 状态类继承链一次性迁移（§6.7：Player/BodyPosture/HandPosture/Handing 四层） | 设计已定稿；重构前已做 git 检查点备份 |
 
 ## 10. 待确认清单
 
@@ -362,4 +462,9 @@ Assets/playercontroller/
 2. 切回空手的按键（如 0 键收枪）：inputactions 现无对应 action，装备互切边暂不含回空手路径
 3. `Look` 输入与相机模块的归属（本控制器只管透传？）
 4. ~~状态内运动逻辑（Phase 2 数值层接入）的优先级~~ —— 已完成：速度/旋转/重力已落地（各状态类 + PlayerMotionValuesSO）
-5. 地面/滞空复用提炼（`GroundStateBase` / `NormalJumpingStateBase`）：Pistol 与 Grenade 完成后统一处理，见 §6.7
+5. ~~地面/滞空复用提炼（`GroundStateBase` / `NormalJumpingStateBase`）~~ —— 已定稿为
+   Player/BodyPosture/HandPosture/Handing 四层继承链一次性迁移（§6.7，2026-09-07）
+6. 瞄准锁定行走档数值语义：现状 `MoveAimSpeed` 以步枪行走档（1.5）跨武器生效；手枪/手雷瞄准
+   是否改走各自行走档（2.0）——迁移期间维持现状，语义确认后单独调整
+7. 推/拉走廊（PlayerHandPosture.Pulling/Pushing）：确认在 GroundStateBase（BodyPosture）下新增
+   Pulling/Pushing 变体（HandPosture）与 Handing 叶子；走廊语义与挂接时机待该功能启动时确认

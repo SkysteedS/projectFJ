@@ -247,7 +247,7 @@ public class PlayerControllerScript : MonoBehaviour
 
     #endregion
 
-    #region 状态机（扁平单机：一个扁平状态枚举 Current + 一个状态类字典 + 一张转换边表）
+    #region 状态机（扁平单机：当前状态类实例 + 状态字典 + 转换边表）
     PlayerStateMachine machine;   // 唯一状态机（裁决 + 切换执行）
     PlayerContext context;        // 状态类的只读通道
     #endregion
@@ -438,7 +438,7 @@ public class PlayerControllerScript : MonoBehaviour
     #endregion
 
     #region 生命周期
-    // Start is called before the first frame update
+    // 生命周期：Start 在首帧前调用一次（缓存组件引用并初始化状态机）
     void Start()
     {
         animator = GetComponent<Animator>();
@@ -449,7 +449,7 @@ public class PlayerControllerScript : MonoBehaviour
         InitStateMachine();
     }
 
-    // Update is called once per frame
+    // 生命周期：Update 每帧执行帧快照捕获、着地探测、状态机调度与动画参数同步
     void Update()
     {
         input.Capture();        // 帧快照：必须在一切输入消费逻辑之前（输入层约定，见设计文档 §4）

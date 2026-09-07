@@ -25,12 +25,14 @@ using UnityEngine;
 /// </summary>
 public class Unarmed_Normal_ClimbTopOut_State : PlayerStateBase
 {
+    #region 状态内结构常量（语义见注释；可调参数见 PlayerMotionValuesSO）
     /// <summary>登顶动画 Tag（Animator 中 climb to end 状态的 m_Tag，见 Animator 控制器）。</summary>
     static readonly int ClimbToEndTagHash = Animator.StringToHash("ClimbToEnd");
     /// <summary>墙面方向向量平方长度下限（零向量防护）。</summary>
     const float MinDirectionSqr = 0.0001f;
     /// <summary>扫描命中点允许低于被抓取手骨的最大值（m）：低于过多说明垂线打到了墙后地面等错误表面。</summary>
     const float GrabPointMaxBelowHand = -0.3f;
+    #endregion
 
     bool grabLeftHand;          // 被固定的手：true = 左手（攀爬状态写入 ctx.TopOutGrabLeftHand，Enter 读取）
     bool grabLockActive;        // 是否允许下达 MatchTarget（进入成功置 true，失败置 false；Exit 清）
