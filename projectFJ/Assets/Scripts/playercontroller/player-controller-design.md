@@ -350,9 +350,7 @@ States/
 
 ## 9. 后续扩展方向（规划中，实施前再确认）
 
-- 推/拉走廊：在 `GroundStateBase` 下新增 `Pulling/Pushing` 变体（HandPosture）与叶子。
-- 翻越类走廊：按 §6.6 同流程新增。
-- `IsTransient` 瞬时标记：登顶类走廊如需要统一判定，再引入。
+- 推/拉：在 `GroundStateBase` 下新增 `Pulling/Pushing` 变体（HandPosture）与叶子。
 
 ## 10. 待确认清单
 
