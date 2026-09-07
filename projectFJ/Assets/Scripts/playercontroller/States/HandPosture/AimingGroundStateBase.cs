@@ -2,38 +2,23 @@ using UnityEngine;
 using UnityEngine.Animations.Rigging;
 
 /// <summary>
-/// 具体状态：手雷（Grenade）× 瞄准（Aiming）× 着地（Ground）。
-/// 复刻自 Pistol_Aiming_Ground_State，并按手雷投掷语义做差异：
-/// - 轴点改放肘部：手雷根（ctx.GrenadeRoot）挂到 ctx.GrenadeAxisPoint 下，
-///   offset / localRotation 独立标定（grenadeAimAxisOffset / grenadeAimAxisLocalEuler，横握姿态）；
-/// - 稳定期手雷朝向方向 = 角色 yaw × 相机 pitch（GrenadeFrontTarget），抛掷偏航由后续落点模块给出；
-/// - 弧线预览已接入（初速 = 手雷 BulletManage.bulletData.bulletInitialSpeed）。行为要点：
-/// - 旋转：始终朝向相机水平前方（look 改变相机朝向时角色随之旋转；SmoothDampAngle 阻尼追角，
-///   参数 aimRotateSmoothTime / aimRotateMaxSpeed；无移动输入也持续追踪——"相机朝哪、角色朝哪"）；
-/// - 速度：瞄准锁定行走档（不接受奔跑，Shift 无效：跑 + 瞄准表现不可用）；档位速度平滑后，
-///   投影到相机前/右轴得到前后/左右目标，两轴各自 MoveTowards 平滑（aimAcceleration），供 2D 混合树（horizontal/vertical speed）；
-/// - 垂直：着地保持向下压速度；瞄准中走下边沿 → 累积重力，过死区后【提议】
-///   （Grenade, Normal, Jumping）（请求边裁决——瞄准状态没有滞空组合，切过去即取消瞄准）；
-/// - 位移：OnAnimatorMove 沿用动画根运动（2D 混合树）+ 手写垂直分量（早期原型 同款）；
-/// - 动画参数：本类只写水平/垂直速度分量；body/hand/handing 由主体类按状态组合同步
-///   （本状态 Hand=Aiming → hand posture=1 驱动瞄准动画分支）。
+/// HandPosture 层 · 地面 × 手部 = Aiming 变体基类。
+/// 收走 Rifle/Pistol/Grenade 三份 Aiming×Ground 共有的瞄准移动与程序化 IK 接管链：
+/// - 旋转：始终朝向相机水平前方（SmoothDampAngle 阻尼追角，两段式进入对齐）；
+/// - 速度：瞄准锁定行走档（不接受奔跑）；两轴各自 MoveTowards 平滑，供 2D 混合树；
+/// - 垂直/离地提议继承 GroundStateBase；位移由地面族 OnAnimatorMove 统一实现；
+/// - 程序化 IK：轴点旋转只读、枪根切父/过渡/退出还原、腕-枪相对位姿捕获与一次性重锁、
+///   双手 ChainIK target 推算——全部为三份瞄准状态的公共流程。
 ///
-/// 程序化 IK 接管（复刻 rifle/pistol 的轴点体系，轴点改放在手肘附近）：
-/// - 轴点（PlayerControllerScript.grenadeAimAxisPoint）由你在场景放置在手肘附近并拖入，
-///   是手雷根旋转的俯仰不变点；代码对轴点只读，绝不写它的父级、位置或旋转。
-/// - 进入瞄准：手雷根设为轴点的子级（只改手雷根的父级），过渡期内把 local 平滑修正到
-///   grenadeAimAxisOffset（offset 即手雷根作为轴点子级时的 localPosition；手雷与步枪到轴点距离不同，独立字段）。
-/// - 瞄准全程：每帧写入 手雷根.localPosition = grenadeAimAxisOffset、localRotation = grenadeAimAxisLocalEuler
-///   （横握手雷需基于轴点的旋转标定；步枪/手枪瞄准姿态竖直、localRotation 恒等即可），
-///   因此 Inspector 调整 grenadeAimAxisOffset / LocalEuler 立即生效；轴点旋转由 TickAxisRotation 程序化推进
-///   （PlayerControllerScript.LateUpdate 应用），手雷根作为子级自动跟随，不使用 Multi-Aim 约束。
-/// - 双手：进入瞬间捕获"腕-枪"相对位姿，每帧按手雷根当前位姿推算并写入左右手 ChainIK target。
-/// - 退出：把手雷根设回进入前父级（优先 RightHandWrist）并恢复 local TRS，交还动画系统。
-/// - 弧线预览（真实抛物线 + 地形采样）已接入（实现在独立工具类 GrenadeArcPreview，本状态只做生命周期调用）；
-///   抛掷偏航（让真实落点对准视线射线）仍待后续接入。
-///   当前稳定期手雷朝向方向 = 角色 yaw × 相机 pitch（GrenadeFrontTarget 占位），只让手肘传递俯仰。
+/// Handing 层差异缝（叶子只覆写解析/语义，不写流程）：
+/// - AimWeaponRoot / AimPivot / AimAxisOffset：枪根/轴点/offset 按武器解析；
+/// - AimLocalRotation：枪根作为轴点子级时的 localRotation（默认 identity；Grenade 横握标定覆写）；
+/// - AlwaysAimToFront：true = 稳定期也恒用"角色 yaw × 相机 pitch"身前目标（Grenade）；
+///   false = 仅进瞄准过渡期用身前目标、稳定期用视线远点（Rifle/Pistol）；
+/// - OnPostAimTargetsUpdated：Tick 中瞄准目标更新后的扩展缝（Grenade 调 GrenadeArcPreview）。
+/// 可调参数见 PlayerMotionValuesSO；提议目标组合经 ctx.Handing 推导。
 /// </summary>
-public class Grenade_Aiming_Ground_State : PlayerStateBase
+public abstract class AimingGroundStateBase : GroundStateBase
 {
     #region 状态内结构常量（语义见注释；可调参数见 PlayerMotionValuesSO）
     /// <summary>着地（非下落）时 falling speed 分量的常态值。</summary>
@@ -55,11 +40,11 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
     float aimYawVelocity;       // 瞄准朝向的当前角速度（°/s；SmoothDampAngle 内部状态）
     float aimAlignTimer;        // 进入对齐阶段剩余时长（>0 时用高响应平滑时间快速到位）
 
-    // —— 程序化 IK 接管（轴点位置只读；旋转由 PlayerControllerScript.LateUpdate 程序化覆盖；手雷根为轴点子级；双手由手雷根反推）——
-    Transform rigRoot;                  // 手雷根（ctx.GrenadeRoot）
-    Transform rigPivot;                 // 轴点（ctx.GrenadeAxisPoint；本类不写它的 transform，旋转覆盖在主体类 LateUpdate）
-    Vector3 rigOffset;                  // 手雷根作为轴点子级时的 localPosition（ctx.GrenadeAxisOffset）
-    bool rigHeld;                       // true = 瞄准 IK 接管中（手雷根已切到轴点下）
+    // —— 程序化 IK 接管（轴点位置只读；旋转由 PlayerControllerScript.LateUpdate 程序化覆盖；枪根为轴点子级；双手由枪根反推）——
+    Transform rigRoot;                  // 枪根（Handing 层 AimWeaponRoot 解析：RifleRoot/PistolRoot/GrenadeRoot）
+    Transform rigPivot;                 // 轴点（Handing 层 AimPivot 解析；本类不写它的 transform，旋转覆盖在主体类 LateUpdate）
+    Vector3 rigOffset;                  // 枪根作为轴点子级时的 localPosition（Handing 层 AimAxisOffset 解析）
+    bool rigHeld;                       // true = 瞄准 IK 接管中（枪根已切到轴点下）
     Transform rigSavedParent;           // 进入前父级（优先 ctx.RightHandWrist）
     Vector3 rigSavedLocalPosition;      // 进入前 local TRS（退出时恢复，交还动画系统）
     Quaternion rigSavedLocalRotation;
@@ -69,15 +54,12 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
     float rigTransitionRemaining;       // 过渡剩余时间；>0 = 仍在进瞄准插值阶段
     float rigTransitionDuration;        // 本次过渡总时长（进入时锁定）
 
-    // 弧线预览：独立工具类（渲染器管理/落点探测/淡入全在其内部，见 GrenadeArcPreview）；
-    // 本状态只负责按生命周期调用 Enter/Tick/Exit，不持有任何弧线字段
-    readonly GrenadeArcPreview arcPreview = new GrenadeArcPreview();
+    // 瞄准方向统一 = 视线远点（相机 forward × aimMissPointDistance）：方向随视线连续变化，
+    // 命中↔未命中切换不再引起枪口/头/胸转向跳变（无需落点平滑——旧"跳变检测+追赶"已随
+    // 命中点目标删除，见 2026-09-03 记录与 UpdateAimTargets 注释）。
+    // 近物命中时子弹（未来从出弹点沿该方向）与准星的微小视差偏移由弹道特效掩盖（后续工作）。
 
-    // 头/胸引导沿用瞄准约定：目标 = 视线远点（相机 forward × aimMissPointDistance）；
-    // 手雷朝向（轴点）方向见 UpdateAimTargets / GrenadeFrontTarget：稳定期占位 = 角色 yaw × 相机 pitch，
-    // 抛掷偏航待弧线落点模块给出（当前弧线预览已接入真实抛物线 + 地形采样）。
-
-    // 进入瞬间捕获的"腕-枪"常量位姿（手雷根空间 local）；瞄准全程据此推算 ChainIK target 的世界位姿
+    // 进入瞬间捕获的"腕-枪"常量位姿（枪根空间 local）；瞄准全程据此推算 ChainIK target 的世界位姿
     bool rightWristCaptured;
     Vector3 rightWristLocalPos;
     Quaternion rightWristLocalRot;
@@ -104,6 +86,38 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
     Vector3 leftWristPrevPos;
     Quaternion leftWristPrevRot;
 
+    #region Handing 层差异缝（叶子只解析武器数据/声明语义，不写流程）
+    /// <summary>枪根（瞄准 IK 接管对象）：Rifle/Pistol/Grenade 叶子解析各自 ctx 引用。</summary>
+    protected abstract Transform AimWeaponRoot(PlayerContext ctx);
+
+    /// <summary>轴点（旋转不变点，代码只读）：Rifle/Pistol → ctx.AimAxisPoint；Grenade → ctx.GrenadeAxisPoint。</summary>
+    protected abstract Transform AimPivot(PlayerContext ctx);
+
+    /// <summary>枪根作为轴点子级时的 localPosition（offset）：各武器独立标定字段。</summary>
+    protected abstract Vector3 AimAxisOffset(PlayerContext ctx);
+
+    /// <summary>
+    /// 枪根作为轴点子级时的 localRotation：默认 identity（步枪/手枪瞄准姿态竖直）；
+    /// Grenade 覆写为 ctx.GrenadeAxisLocalRotation（横握手雷需相对肘部轴点的旋转标定）。
+    /// </summary>
+    protected virtual Quaternion AimLocalRotation(PlayerContext ctx) => Quaternion.identity;
+
+    /// <summary>
+    /// 是否稳定期也恒用"角色 yaw × 相机 pitch"身前目标（Grenade 抛掷偏航占位 = true）；
+    /// false = 仅进瞄准过渡期用身前点、稳定期切视线远点（Rifle/Pistol）。
+    /// </summary>
+    protected virtual bool AlwaysAimToFront => false;
+
+    /// <summary>Tick 中瞄准目标更新后的扩展缝（默认空；Grenade 叶子覆写调 GrenadeArcPreview.Tick）。</summary>
+    protected virtual void OnPostAimTargetsUpdated(PlayerContext ctx) { }
+
+    /// <summary>瞄准 IK 接管是否生效（手雷叶子把弧线门控交给 GrenadeArcPreview 时读取）。</summary>
+    protected bool RigHeld => rigHeld;
+
+    /// <summary>枪根进瞄准过渡是否进行中（手雷叶子把弧线门控交给 GrenadeArcPreview 时读取）。</summary>
+    protected bool RigTransitioning => rigTransitionRemaining > 0f;
+    #endregion
+
     #region 状态生命周期与瞄准移动（Enter/Exit/Tick）
     public override void Enter(PlayerContext ctx)
     {
@@ -121,39 +135,33 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
         aimYawVelocity = 0f;
         aimAlignTimer = ctx.Values.aimAlignTime;
 
-        // 程序化 IK 接管：捕获腕-枪相对位姿 → 手雷根切到轴点下 → 启动过渡
+        // 程序化 IK 接管：捕获腕-枪相对位姿 → 枪根切到轴点下 → 启动过渡
         BeginAimRig(ctx);
 
         // 进入即设置瞄准引导目标（首帧目标位置正确，约束无"从旧位置追过来"的过程；
         // 瞄准方向=视线远点，无跳变平滑字段）
         UpdateAimTargets(ctx);
-
-        // 弧线预览：查找渲染器并准备世界空间采样与淡入状态（实现见 GrenadeArcPreview）
-        arcPreview.Enter(ctx);
     }
 
     public override void Exit(PlayerContext ctx)
     {
-        // 退出瞄准：关闭轴点旋转程序化覆盖，手雷根设回进入前父级并恢复 local TRS；轴点全程不动，混合交给动画系统
+        // 退出瞄准：关闭轴点旋转程序化覆盖，枪设回进入前父级并恢复 local TRS；轴点全程不动，混合交给动画系统
         ctx.AimRigActive = false;
         RestoreAimRig(ctx);
-
-        // 退出瞄准：清空弧线预览
-        arcPreview.Exit();
     }
 
     public override void Tick(PlayerContext ctx)
     {
         float dt = Time.deltaTime;
 
-        // 过渡期内把手雷根 local 平滑修正到 offset；过渡结束后每帧持续应用 offset（改值即时生效）
+        // 过渡期内把枪根 local 平滑修正到 offset；过渡结束后每帧持续应用 offset（改值即时生效）
         TickAimRigTransition(ctx);
 
-        // 每帧把头/胸约束的目标移到相机瞄准点（手雷朝向方向由 GunAimPoint 驱动轴点旋转，见 TickAxisRotation）
+        // 每帧把头/胸约束的目标移到相机瞄准点（枪口方向由 GunAimPoint 驱动轴点旋转，见 TickAxisRotation）
         UpdateAimTargets(ctx);
 
-        // 弧线预览：抛物线解析 + 地形采样 + 淡入（独立工具类，见 GrenadeArcPreview）
-        arcPreview.Tick(ctx, rigHeld, rigTransitionRemaining > 0f);
+        // 扩展缝：瞄准目标更新后的武器特例（Grenade 弧线预览）
+        OnPostAimTargetsUpdated(ctx);
 
         RotateTowardCameraForward(ctx);
 
@@ -174,11 +182,8 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
         aimVerticalSpeed = Mathf.MoveTowards(aimVerticalSpeed, targetVertical, ctx.Values.aimAcceleration * dt);
         aimHorizontalSpeed = Mathf.MoveTowards(aimHorizontalSpeed, targetHorizontal, ctx.Values.aimAcceleration * dt);
 
-        // 垂直：着地贴地 / 离地累积重力（瞄准中走下边沿）
-        float vertical = ctx.Motion.VerticalVelocity;
-        vertical = ctx.IsGrounded
-            ? ctx.Values.groundStickSpeed
-            : ctx.Values.ApplyGravity(vertical, dt);
+        // 垂直：着地贴地 / 离地累积重力（瞄准中走下边沿；地面族公共计算）
+        float vertical = NextGroundVertical(ctx, ctx.Motion.VerticalVelocity, dt);
 
         // 写回共享运动槽（水平 = 两瞄准轴合成的相机空间速度；供滞空继承）
         var velocity = ctx.Motion.Velocity;
@@ -186,27 +191,26 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
         velocity.y = vertical;
         ctx.Motion.Velocity = velocity;
 
-        // 离地且垂直速度越过死区 → 提议（手雷正常手部滞空，请求边裁决；瞄准无滞空组合，切换即取消瞄准）
-        if (!ctx.IsGrounded
-            && (vertical < ctx.Values.airborneFallThreshold || vertical > ctx.Values.airborneRiseThreshold))
-        {
-            ctx.RequestTransition(PlayerHanding.Grenade, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping);
-            return;
-        }
+        // 离地且垂直速度越过死区 → 提议滞空（请求边裁决；瞄准无滞空组合，切换即取消瞄准）
+        if (TryRequestAirborneExit(ctx, vertical)) return;
 
         WriteAnimatorParams(ctx);
     }
-
     #endregion
 
     #region 瞄准目标与轴点旋转（约束目标位置、确定性旋转推进）
     /// <summary>
     /// 瞄准引导目标更新：
     /// 头/胸的瞄准方向【统一 = 视线远点】（相机中心 forward × aimMissPointDistance 处的点）；
-    /// 手雷朝向目标（GunAimPoint）：过渡与稳定期统一 = 角色 yaw + 相机 pitch 的角色身前远点
-    /// （GrenadeFrontTarget）——手雷只把手肘轴点的俯仰作为输入，偏航由后续弧线/落点模块给出；
-    /// 弧线接入前该占位保证轴点俯仰连续，不追视线 yaw。
-    /// 头/胸的瞄准方向仍指向视线远点；命中检测保留作准星/调试（LastAimHit/LastAimPoint）。
+    /// 枪口目标（GunAimPoint）驱动轴点旋转：Rifle/Pistol 过渡期用角色身前点、结束后用视线远点；
+    /// Grenade（AlwaysAimToFront）恒定用"角色 yaw × 相机 pitch"身前点（抛掷偏航占位）——
+    /// 方向随视线连续变化，命中↔未命中/表面切换不再引起转向跳变（原"命中点+跳变平滑"方案已弃用，
+    /// 视差切换是目前体感跳变的根源，方向统一到视线后该根源消失）。
+    /// 命中检测仍保留：作为准星判定/调试信息（LastAimHit/LastAimPoint），未来子弹与曳光特效使用。
+    /// 枪口在"进瞄准过渡期"指向角色身前（角色可能仍在转身，若此时追相机瞄准点，
+    /// 枪口会随转身扫出大圆弧），过渡结束后切换到视线远点。
+    /// 过渡期方向 = 角色 yaw + 相机 pitch：偏航随角色对齐过程平滑，俯仰提前取相机值，
+    /// 避免过渡结束切到视线远点时出现俯仰阶跃。
     /// 只移动目标对象 position，不改约束引用（约束装配即定，与本项目程序化 IK 目标约定一致）；
     /// 约束 weight 由动画参数经 SetIKweight 回写，本方法不参与。
     /// </summary>
@@ -228,9 +232,11 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
         ctx.LastAimValid = true;
         ctx.LastAimHit = hit;
 
-        // 手雷朝向专用瞄准点（弧线/偏航求解接入前的占位）：统一用 GrenadeFrontTarget
-        // （角色 yaw × 相机 pitch），轴点只做俯仰传递；PlayerControllerScript.LateUpdate 据此覆盖轴点旋转。
-        Vector3 gunTarget = GrenadeFrontTarget(ctx);
+        bool transitioning = rigHeld && rigTransitionRemaining > 0f;
+        Vector3 gunTarget = (transitioning || AlwaysAimToFront) ? AimFrontTarget(ctx) : lookPoint;
+
+        // 枪口专用瞄准点：过渡期=角色身前点（角色仍在转身对齐，不追相机落点）；
+        // 平时=视线远点。PlayerControllerScript.LateUpdate 据此覆盖轴点旋转。
         ctx.GunAimPoint = gunTarget;
 
         // 轴点旋转确定性推进：必须【先】于双手推算——手部 target 与 LateUpdate 写入轴点的
@@ -240,7 +246,7 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
         SetAimTargetPosition(ctx.HeadAimConstraint, lookPoint);
         SetAimTargetPosition(ctx.BodyAimConstraint, lookPoint);
 
-        // 瞄准全程：双手 ChainIK target 由"进入时捕获的腕-枪相对位姿 × 当前手雷根位姿"推算
+        // 瞄准全程：双手 ChainIK target 由"进入时捕获的腕-枪相对位姿 × 当前枪根位姿"推算
         UpdateHandTargets(ctx);
     }
 
@@ -255,23 +261,23 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
     }
     #endregion
 
-    #region 程序化 IK 接管（手雷根切父/过渡、双手 ChainIK 推算、退出还原）
+    #region 程序化 IK 接管（枪根切父/过渡、双手 ChainIK 推算、退出还原）
     /// <summary>
-    /// 进入瞄准：① 实时捕获双手腕相对手雷根的位姿；② 记录手雷根原父级与 local TRS；
-    /// ③ 把手雷根设为轴点的子级（只改枪，不改轴点）；④ 启动过渡计时。
+    /// 进入瞄准：① 实时捕获双手腕相对枪根的位姿；② 记录枪根原父级与 local TRS；
+    /// ③ 把枪根设为轴点的子级（只改枪，不改轴点）；④ 启动过渡计时。
     /// </summary>
     void BeginAimRig(PlayerContext ctx)
     {
-        rigRoot = ctx.GrenadeRoot;
-        rigPivot = ctx.GrenadeAxisPoint;
-        rigOffset = ctx.GrenadeAxisOffset;
+        rigRoot = AimWeaponRoot(ctx);
+        rigPivot = AimPivot(ctx);
+        rigOffset = AimAxisOffset(ctx);
         rigHeld = false;
         rigSavedParent = null;
         rigTransitionRemaining = 0f;
         rightWristCaptured = false;
         leftWristCaptured = false;
 
-        // 未装配（缺手雷根/轴点）→ 跳过手雷根接管：只剩头/胸引导与 GunAimPoint 记录（无枪身可转）
+        // 未装配（缺枪根/轴点）→ 跳过枪根接管：只剩头/胸引导与 GunAimPoint 记录（无枪身可转）
         if (rigRoot == null || rigPivot == null) return;
         if (rigPivot.IsChildOf(rigRoot))
         {
@@ -289,7 +295,7 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
         rigSavedLocalRotation = rigRoot.localRotation;
         rigSavedLocalScale = rigRoot.localScale;
 
-        // 手雷根设为轴点子级（世界位姿不跳）；轴点旋转由脚本覆盖时枪自动跟随
+        // 枪根设为轴点子级（世界位姿不跳）；轴点旋转由脚本覆盖时枪自动跟随
         rigRoot.SetParent(rigPivot, true);
         rigStartLocalPosition = rigRoot.localPosition;
         rigStartLocalRotation = rigRoot.localRotation;
@@ -311,7 +317,7 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
         ctx.AimRigActive = true;
     }
 
-    /// <summary>进入瞬间把左右手 ChainIK 的 tip（腕骨）位姿换算进手雷根 local 空间保存。</summary>
+    /// <summary>进入瞬间把左右手 ChainIK 的 tip（腕骨）位姿换算进枪根 local 空间保存。</summary>
     void CaptureHandOffsets(PlayerContext ctx)
     {
         if (ctx.RightArmChainConstraint != null)
@@ -337,16 +343,15 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
     }
 
     /// <summary>
-    /// 过渡期：手雷根 local 从切父起点平滑过渡到（ctx.GrenadeAxisOffset, ctx.GrenadeAxisLocalRotation）。
-    /// 过渡结束后每帧持续写入：localPosition = grenadeAimAxisOffset、localRotation = grenadeAimAxisLocalEuler
-    /// （横握手雷需要基于轴点的旋转标定；步枪/手枪瞄准姿态竖直、localRotation 恒等，此处不同）。
-    /// 使 Inspector 调整 offset/Euler 立即生效；轴点本身始终不被写入。
+    /// 过渡期：枪根 local 从切父起点平滑过渡到（aimAxisOffset, AimLocalRotation）。
+    /// 过渡结束后每帧持续写入 localPosition = aimAxisOffset、localRotation = AimLocalRotation，
+    /// 使 Inspector 调整 offset 立即生效；轴点本身始终不被写入。
     /// </summary>
     void TickAimRigTransition(PlayerContext ctx)
     {
         if (!rigHeld || rigRoot == null) return;
 
-        Quaternion targetLocalRotation = ctx.GrenadeAxisLocalRotation;
+        Quaternion targetLocalRotation = AimLocalRotation(ctx);
         if (rigTransitionRemaining > 0f)
         {
             rigTransitionRemaining = Mathf.Max(0f, rigTransitionRemaining - Time.deltaTime);
@@ -362,17 +367,17 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
             return;
         }
 
-        // 稳定期：持续应用 offset（轴点坐标系下的 local），改 grenadeAimAxisOffset / LocalEuler 即时生效
+        // 稳定期：持续应用 offset（轴点坐标系下的 local），改 aimAxisOffset 即时生效
         rigRoot.localPosition = rigOffset;
         rigRoot.localRotation = targetLocalRotation;
     }
 
     /// <summary>
-    /// 过渡期手雷朝向 aim 目标：角色身前远点，方向 = 角色 yaw（水平 forward）+ 相机 pitch。
-    /// 水平原点取轴点；角色仍在转身对齐相机 yaw 期间手雷朝向不追相机 yaw，但俯仰直接取相机，
+    /// 枪口身前 aim 目标：角色身前远点，方向 = 角色 yaw（水平 forward）+ 相机 pitch。
+    /// 水平原点取轴点；角色仍在转身对齐相机 yaw 期间枪口不追相机 yaw，但俯仰直接取相机，
     /// 使过渡结束切到视线远点时俯仰连续（偏航残余由转身插值吸收）。
     /// </summary>
-    Vector3 GrenadeFrontTarget(PlayerContext ctx)
+    Vector3 AimFrontTarget(PlayerContext ctx)
     {
         Vector3 origin = rigPivot != null
             ? rigPivot.position
@@ -397,10 +402,10 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
 
     /// <summary>
     /// 轴点旋转的确定性推进（状态 Tick 内执行，LateUpdate 只做应用）：
-    /// RotateTowards 以 aimAxisMaxRotSpeed 限速把 rigAxisRotation 插向"本帧手雷朝向瞄准方向"，
+    /// RotateTowards 以 aimAxisMaxRotSpeed 限速把 rigAxisRotation 插向"本帧枪口瞄准方向"，
     /// 结果写入 ctx.AxisPointRotation——该值同时被 LateUpdate（设置轴点 worldRotation）与
     /// UpdateHandTargets（推算双手 target）使用，保证手/枪同帧同旋转。
-    /// 轴向语义：沿用原手雷朝向约定（aimAxis=Z_NEG）——aimAxisNegZ=true 时让轴点 -Z 指向瞄准点。
+    /// 轴向语义：沿用原枪口约定（aimAxis=Z_NEG）——aimAxisNegZ=true 时让轴点 -Z 指向瞄准点。
     /// </summary>
     void TickAxisRotation(PlayerContext ctx)
     {
@@ -418,8 +423,8 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
     }
 
     /// <summary>
-    /// 双手 ChainIK target 推算：用进入瞬间捕获的"腕-枪"常量位姿 × 本帧手雷根应处位姿
-    /// （轴点位置 + rigAxisRotation × 手雷根 local，与 LateUpdate 写入轴点的旋转同值），
+    /// 双手 ChainIK target 推算：用进入瞬间捕获的"腕-枪"常量位姿 × 本帧枪根应处位姿
+    /// （轴点位置 + rigAxisRotation × 枪根 local，与 LateUpdate 写入轴点的旋转同值），
     /// 得到本帧手腕应在的世界位姿并写入 target。只写 target.transform，不改约束装配。
     /// 注意：正常↔瞄准的动画 crossfade 期间右手 TwoBoneIK 与 ChainIK 权重同时 > 0，
     /// 右手 TwoBoneIK target 的对齐由 PlayerControllerScript.UpdateRightHandAimBlendTargets
@@ -442,7 +447,7 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
                 leftWristPrevRot = leftWristLocalRot;
                 CaptureHandOffsets(ctx);
                 rigHandLocked = true;
-                rigRelockBlendDuration = Mathf.Max(MinRigTransitionDuration, ctx.Values.aimHandRelockBlendTime);
+                rigRelockBlendDuration = Mathf.Max(0.001f, ctx.Values.aimHandRelockBlendTime);
                 rigRelockBlendRemaining = rigRelockBlendDuration;
             }
         }
@@ -463,7 +468,7 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
             lRot = Quaternion.Slerp(leftWristPrevRot, leftWristLocalRot, s);
         }
 
-        // 手雷根本帧应处位姿（确定性：旋转 = rigAxisRotation，与轴点即将写入的 worldRotation 一致）
+        // 枪根本帧应处位姿（确定性：旋转 = rigAxisRotation，与轴点即将写入的 worldRotation 一致）
         Vector3 gunPos = rigPivot.position + rigAxisRotation * rigRoot.localPosition;
         Quaternion gunRot = rigAxisRotation * rigRoot.localRotation;
         if (rightWristCaptured)
@@ -487,7 +492,7 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
         target.SetPositionAndRotation(position, rotation);
     }
 
-    /// <summary>退出瞄准：手雷根设回进入前父级并恢复 local TRS；轴点全程不动。</summary>
+    /// <summary>退出瞄准：枪设回进入前父级并恢复 local TRS；轴点全程不动。</summary>
     void RestoreAimRig(PlayerContext ctx)
     {
         if (!rigHeld)
@@ -519,7 +524,7 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
     }
     #endregion
 
-    #region 转向、位移与动画参数
+    #region 转向与动画参数（OnAnimatorMove 由 GroundStateBase 统一实现）
     /// <summary>
     /// 瞄准转向：角色始终朝向相机水平前方（相机 forward 投影 XZ）。
     /// 与地面移动转向（RotateTowardMoveDirection）的差异：
@@ -546,14 +551,6 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
         ctx.Transform.rotation = Quaternion.Euler(0f, aimYaw, 0f);
     }
 
-    public override void OnAnimatorMove(PlayerContext ctx)
-    {
-        // 瞄准地面：沿用动画根运动（2D 混合树）+ 手写垂直分量（早期原型 同款）
-        Vector3 delta = ctx.Animator.deltaPosition;
-        delta.y = ctx.Motion.VerticalVelocity * Time.deltaTime;
-        ctx.CharacterController.Move(delta);
-    }
-
     void WriteAnimatorParams(PlayerContext ctx)
     {
         var anim = ctx.AnimParams;   // 值缓存写入器：同值跳过 SetFloat
@@ -565,4 +562,3 @@ public class Grenade_Aiming_Ground_State : PlayerStateBase
     }
     #endregion
 }
-

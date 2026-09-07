@@ -1,21 +1,17 @@
 using UnityEngine;
 
 /// <summary>
-/// 具体状态：空手（Unarmed）× 正常手部（Normal）× 着地（Ground）。
-/// 地面移动参照 早期原型（Rotate / UpdateSpeed / UpdateVerticalVelocity 地面分支）：
-/// - 旋转：WASD → 相机轴世界朝向，RotateTowards 插值转向（无输入不转向）；
-/// - 水平速度：目标 = 无武器档位（走 2 / 跑 4 × 输入模长），常态 MoveTowards 恒加速度插值；
-///   武器切换（空手↔持枪）后按 Switching Weapon 动画进度做旧→新档位插值（检测不到动画时兜底 weaponSwitchSpeedBlendTime）；
-/// - 垂直：着地保持向下压速度；离地（走下边沿）累积重力，越过死区阈值时【提议】切滞空（请求边裁决）；
-/// - 位移：OnAnimatorMove 沿用动画根运动水平分量 + 手写垂直分量（早期原型 同款）；
-/// - 动画参数：body posture = 0；vertical/horizontal speed = 水平面内前后/左右分量（非瞄准：全速进前后、左右 0）；
-///   falling speed = 垂直方向速度（原始 m/s，正值向上/负值向下，越界由混合树钳制；落地过渡期保持捕获值）。
-///
-/// 数值约定：所有可调参数集中在 PlayerMotionValuesSO（Inspector 可调）；
-/// 状态内结构常量集中定义在本类顶部——禁止散落无说明的字面值。
-/// 跳跃触发不在本类：Jump 信号边在 Tick 前先知裁决（见 PlayerControllerScript.InitStateMachine）。
+/// HandPosture 层 · 地面 × 手部 = Normal（默认手部）变体基类。
+/// 收走 4 个 Normal×Ground 状态（Unarmed/Rifle/Pistol/Grenade）共有的：
+/// - 落地过渡（landingFallBlend / landingBlendTimer / landingBlendActive）；
+/// - 武器切换速度插值（weaponSwitchBlendTimer / StartSpeed / Active / AnimDriven）；
+/// - Enter 公共三段（落地交接捕获 → HandingChanged 消费并启动切枪插值 → 贴地压速）；
+/// - Tick 骨架与转向/参数写入/手部 IK 写入辅助。
+/// 差异缝：WriteHands（Unarmed 空实现；Rifle/Pistol/Grenade 在 Handing 层覆写，
+/// 经本层 IK 写入辅助只提供锚点数据）。
+/// 可调参数（速度档位/时长/阈值）见 PlayerMotionValuesSO；档位按 ctx.Handing 查询。
 /// </summary>
-public class Unarmed_Normal_Ground_State : PlayerStateBase
+public abstract class NormalGroundStateBase : GroundStateBase
 {
     #region 状态内结构常量（语义见注释；可调参数见 PlayerMotionValuesSO）
     /// <summary>落地过渡计时归零值（计时结束判定）。</summary>
@@ -67,13 +63,15 @@ public class Unarmed_Normal_Ground_State : PlayerStateBase
     {
         float dt = Time.deltaTime;
 
+        // 武器手部 IK 差异点（Unarmed 空实现；Rifle/Pistol/Grenade 在 Handing 层覆写）
+        WriteHands(ctx);
+
         RotateTowardMoveDirection(ctx);
 
-        // 水平速度：目标 = 无武器档位（走 2 / 跑 4）× 输入模长（模长为准）；
+        // 水平速度：目标 = 按当前手持查询的档位（走/跑 × 输入模长，数值层单点）；
         // 武器切换过渡期做"旧档位 → 新档位"的时间线性插值（与切换动画时长匹配），
         // 常态回到 MoveTowards 恒加速度插值（从 Motion.HorizontalSpeed 续值，无断点）。
-        float targetSpeed = (ctx.Input.Run ? ctx.Values.unarmedRunSpeed : ctx.Values.unarmedWalkSpeed)
-                            * ctx.Input.Move.magnitude;
+        float targetSpeed = ctx.Values.GroundTargetSpeed(ctx.Input.Move.magnitude, ctx.Input.Run, ctx.Handing);
         float speed;
         if (weaponSwitchBlendActive)
         {
@@ -101,15 +99,12 @@ public class Unarmed_Normal_Ground_State : PlayerStateBase
         }
         else
         {
-            speed = ctx.Values.MoveUnarmedSpeed(ctx.Motion.HorizontalSpeed,
-                                                ctx.Input.Move.magnitude, ctx.Input.Run, dt);
+            speed = ctx.Values.MoveGroundSpeed(ctx.Motion.HorizontalSpeed,
+                                              ctx.Input.Move.magnitude, ctx.Input.Run, dt, ctx.Handing);
         }
 
         // 垂直：着地贴地 / 离地累积重力（走下边沿）
-        float vertical = ctx.Motion.VerticalVelocity;
-        vertical = ctx.IsGrounded
-            ? ctx.Values.groundStickSpeed
-            : ctx.Values.ApplyGravity(vertical, dt);
+        float vertical = NextGroundVertical(ctx, ctx.Motion.VerticalVelocity, dt);
 
         // 写回共享运动槽（水平分量叠加移动方向——无输入沿用最后方向，速度标量插值衰减；
         // 滞空/落地等新状态 Enter 从此读取）
@@ -121,30 +116,22 @@ public class Unarmed_Normal_Ground_State : PlayerStateBase
         ctx.Motion.Velocity = velocity;
 
         // 离地且垂直速度越过死区 → 提议进滞空（转换条件由请求边裁决；切换后中止本帧写入）
-        if (!ctx.IsGrounded
-            && (vertical < ctx.Values.airborneFallThreshold || vertical > ctx.Values.airborneRiseThreshold))
-        {
-            ctx.RequestTransition(PlayerHanding.Unarmed, PlayerHandPosture.Normal, PlayerBodyPosture.Jumping);
-            return;
-        }
+        if (TryRequestAirborneExit(ctx, vertical)) return;
 
-        WriteAnimatorParams(ctx, speed);
+        WriteGroundAnimatorParams(ctx, speed);
     }
+
+    /// <summary>
+    /// 武器手部 IK 差异缝（本类每帧 Tick 在转向/速度前调用）：
+    /// 默认空实现 = 空手不写 IK；Rifle/Pistol/Grenade 叶子覆写，经本类 IK 写入辅助提供锚点数据。
+    /// </summary>
+    protected virtual void WriteHands(PlayerContext ctx) { }
     #endregion
 
-    #region 位移与动画参数（OnAnimatorMove / WriteAnimatorParams）
-    public override void OnAnimatorMove(PlayerContext ctx)
-    {
-        // 地面：沿用动画根运动（水平）+ 手写垂直分量（早期原型 同款）；
-        // 落地过渡期 landingFallBlend 只影响动画下落姿态参数，位移以贴地速度为准。
-        Vector3 delta = ctx.Animator.deltaPosition;
-        delta.y = ctx.Motion.VerticalVelocity * Time.deltaTime;
-        ctx.CharacterController.Move(delta);
-    }
-
+    #region 转向与速度辅助
     void RotateTowardMoveDirection(PlayerContext ctx)
     {
-        // 无输入不改变朝向（早期原型 同款）
+        // 无输入不改变朝向
         if (ctx.Input.Move.sqrMagnitude <= ctx.Values.minMoveSqrMagnitude) return;
 
         Vector3 moveDir = CameraSpaceMoveDir(ctx);
@@ -155,9 +142,9 @@ public class Unarmed_Normal_Ground_State : PlayerStateBase
                                                           ctx.Values.rotateSpeed * Time.deltaTime);
     }
 
-    void WriteAnimatorParams(PlayerContext ctx, float horizontalSpeed)
+    void WriteGroundAnimatorParams(PlayerContext ctx, float horizontalSpeed)
     {
-        // 落地过渡：保持捕获的下落速度（动画下落姿态参数）；计时结束释放（对应 早期原型 stance 回 0 后归零）
+        // 落地过渡：保持捕获的下落速度（动画下落姿态参数）；计时结束释放
         if (landingBlendActive)
         {
             landingBlendTimer -= Time.deltaTime;
@@ -169,13 +156,77 @@ public class Unarmed_Normal_Ground_State : PlayerStateBase
             }
         }
 
-        var anim = ctx.AnimParams;   // 值缓存写入器：同值跳过 SetFloat
-        // 水平面内速度分量：非瞄准时角色朝向移动方向——全速进前后轴（vertical speed），左右轴固定为 0
-        anim.SetFloat(PlayerControllerScript.AnimVerticalSpeed, horizontalSpeed);
-        anim.SetFloat(PlayerControllerScript.AnimHorizontalSpeed, ctx.Values.nonAimLateralSpeed);
-        // 垂直方向速度（原始 m/s，正值向上/负值向下；越界由混合树钳制）：着地为 0，落地过渡期保持捕获值
-        anim.SetFloat(PlayerControllerScript.AnimFallingSpeed,
-                      landingBlendActive ? landingFallBlend : NoLandingFallSpeed);
+        // 非瞄准三参数：全速进前后轴（vertical speed）、左右轴固定为 0；
+        // falling speed：着地为 0，落地过渡期保持捕获值
+        WriteNonAimSpeedParams(ctx, horizontalSpeed, landingBlendActive ? landingFallBlend : NoLandingFallSpeed);
+    }
+    #endregion
+
+    #region 手部 IK 写入辅助（Handing 层只提供锚点数据与告警标志）
+    /// <summary>
+    /// 右手 TwoBoneIK 标定位写入（Chest 子物体 local）：脚本是唯一权威写入者。
+    /// 只写 target local TRS；缺装配只告警一次（warnOnce 由调用方持有）。
+    /// debugTag 用于区分武器日志前缀（如 [RightHandIK][Pistol]），逐帧日志由 rightHandIkFrameDebugLog 开关门控。
+    /// </summary>
+    protected void WriteRightHandCalibratedPose(PlayerContext ctx,
+                                                Vector3 anchorLocalPosition, Vector3 anchorLocalEuler,
+                                                string debugTag, ref bool warnOnce)
+    {
+        Transform target = ctx.RightHandConstraint != null ? ctx.RightHandConstraint.data.target : null;
+        if (target == null)
+        {
+            if (!warnOnce)
+            {
+                warnOnce = true;
+                Debug.LogWarning(
+                    "[RightHandIK] 同步无效：右手 TwoBoneIK 约束 data.target 未装配",
+                    ctx.Transform);
+            }
+            return;
+        }
+
+        target.localPosition = anchorLocalPosition;
+        target.localRotation = Quaternion.Euler(anchorLocalEuler);
+
+        // 逐帧调试日志（rightHandIkFrameDebugLog）：打印「脚本写入后」的值，与帧末日志对比定位覆盖来源
+        if (ctx.Values.rightHandIkFrameDebugLog)
+        {
+            Debug.Log($"{debugTag} Write  f{Time.frameCount} {target.name} " +
+                      $"localPos={target.localPosition:F3} localRot={target.localRotation.eulerAngles:F1} " +
+                      $"| calibrated={anchorLocalPosition:F3}&{anchorLocalEuler:F1}");
+        }
+    }
+
+    /// <summary>
+    /// 左手 TwoBoneIK 贴握写入：目标 = 武器根当前位姿 × 锚点值（武器子物体 local）。
+    /// 若 target 仍装配在武器层级内（武器子物体自动跟随）则不写入；
+    /// 缺武器根/约束 target 只告警一次（warnOnce 由调用方持有）。
+    /// </summary>
+    protected void WriteLeftHandGripPose(PlayerContext ctx, Transform weaponRoot,
+                                         Vector3 anchorLocalPosition, Vector3 anchorLocalEuler,
+                                         string weaponFieldName, ref bool warnOnce)
+    {
+        Transform target = ctx.LeftHandConstraint != null ? ctx.LeftHandConstraint.data.target : null;
+        if (weaponRoot == null || target == null)
+        {
+            if (!warnOnce)
+            {
+                warnOnce = true;
+                Debug.LogWarning(
+                    $"[LeftHandIK] 同步无效：{weaponFieldName}Root=" +
+                    $"{(weaponRoot != null ? weaponRoot.name : $"null（PlayerControllerScript.{weaponFieldName} 未指派）")}，" +
+                    $"leftHandTarget={(target != null ? target.name : "null（左手 TwoBoneIK 约束 data.target 未装配）")}",
+                    ctx.Transform);
+            }
+            return;
+        }
+
+        // 只写 target 的 transform；参考引用（约束装配）不变
+        if (target.IsChildOf(weaponRoot)) return;   // 武器子物体：自动跟随，无需写入
+
+        target.SetPositionAndRotation(
+            weaponRoot.TransformPoint(anchorLocalPosition),
+            weaponRoot.rotation * Quaternion.Euler(anchorLocalEuler));
     }
     #endregion
 }

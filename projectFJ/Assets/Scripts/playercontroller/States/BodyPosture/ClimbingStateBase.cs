@@ -1,45 +1,20 @@
 using UnityEngine;
 
 /// <summary>
-/// 具体状态：空手（Unarmed）× 正常手部（Normal）× 攀爬（Climbing）。
-/// 行为取自 早期原型 攀爬段（保留项）：
-/// - 进入：地面 Jump 信号边（跳跃键"攀爬优先"判定）或滞空持久边（空中抓墙，上升/下降均可）——
-///   两者共用同一套"墙面命中 + 水平速度朝墙"条件，见 PlayerControllerScript 攀爬进入检测区；
-/// - 墙面复测（覆盖式）：全部网格射线发射统计，缺失比例 ≥ Values.climbWallExitMissRatio（默认 50%）
-///   且连续 climbExitMissFrames 帧 → 视为脱墙，提议回地面（物理驱逐）——容忍头顶射线越过墙顶，
-///   避免与后续登顶检测冲突导致无法登顶；
-/// - 退出输入：QuitClimb 信号边（按 X 退回默认姿态）；
-/// - 向下爬至着陆：持续按 S（下）且下方持续探测到可着陆（GroundProbe 去抖着地，ctx.IsGrounded）
-///   连续达 Values.climbDownExitFrames 帧 → 自动请求回 Normal 地面姿态（爬到底部直接落地转站立）；
-/// - 头部注视：head Multi-Aim 的目标由本状态内写入（无外部写入）——有输入时方向 = 墙上移动方向、
-///   最大转角 Values.climbHeadLookAngle（可调）；无输入保持上一注视角度（不回正）；
-/// - 到顶探测（本版实现）：从较高手的手腕上方（topOutProbeUpOffset + topOutProbePalmOffset 偏差）沿墙面方向
-///   射一根射线，连续 topOutProbeMissFrames 帧未命中墙面 = 该手已越过墙顶 → 请求 ClimbTopOut；
-///   并把该手写入 ctx.TopOutGrabLeftHand（登顶状态据此对同一只手 MatchTarget 固定，见
-///   Unarmed_Normal_ClimbTopOut_State）。到顶请求优先于脱墙退出（墙顶缺失与到顶同帧竞争时以登顶为准）。
-/// - 脚部 IK：与手共用步进节奏（climbStepInterval / climbSwitchTime）——上下爬与手同拍反相
-///   （同侧手在上则脚在下），左右爬双脚与手同相开合（打开/收拢均停在基准线上，不上不下）；
-/// - 朝墙：身体平面垂直于墙面法线（面向墙），RotateTowards 插值；
-/// - 位移：输入映射到墙面切平面（W=角色上方、S=下方、D=右、A=左）× climbSpeed，
-///   沿法线贴墙收敛（保持 climbWallHugDistance），无重力——全部脚本接管（OnAnimatorMove）；
-/// - 动画参数：本类只写速度分量（攀爬树不用，写 0）；body/hand/handing 由主体类同步（Body=Climbing）。
+/// BodyPosture 层 · 攀爬族基类（Climbing；当前仅 Unarmed×Normal 一支合法组合，方案 A = 族行为宿主）。
+/// 以原 Unarmed_Normal_Climbing_State 唯一实现为基线整体承载攀爬族字段与流程：
+/// - 进入：地面 Jump 信号边（攀爬优先）或滞空持久边（空中抓墙）——条件见 PlayerControllerScript；
+/// - 墙面覆盖式复测与脱墙去抖（容忍头顶射线越过墙顶）、QuitClimb 信号边、向下爬至着陆自动退出；
+/// - 头部/身体 Multi-Aim 注视、手脚步进节奏 IK（墙面坐标系姿态，参数见 PlayerMotionValuesSO
+///   【攀爬手部/脚部 IK】区）、朝墙 RotateTowards、贴墙收敛位移（全部脚本接管）；
+/// - 到顶探测（优先于脱墙退出）：较高手手腕上方射线连续未命中 → 写 ctx.TopOutGrabLeftHand 并请求
+///   ClimbTopOut（登顶族见 ClimbTopOutStateBase / 其 Handing 叶子）；
+/// - 动画参数：只写速度分量（攀爬树不用，写 0）；body/hand/handing 由主体类同步。
 ///
-/// 攀爬手部 IK（本版实现，类原神姿态；参数见 PlayerMotionValuesSO【攀爬手部 IK】区，全部可 Inspector 调参）：
-/// 程序化 TwoBoneIK 目标 = "跟随头部的水平线"为基准的墙面坐标系姿态——
-/// - 上下攀爬：双手沿中线（距中线 climbHandCenterDist）上下交替，一手在水平线上方
-///   climbHandAlternateLength、另一手下方同值（交替长度一致、上下对称），每步进间隔交替换手；
-/// - 左右攀爬：对应移动方向侧的手在水平线下方 climbHandPlaceDist、相反侧手在上方同值
-///   （放置距离一致）；横向按"收拢（中线距离 − 开合幅度）/ 打开（中线距离 + 开合幅度）"
-///   两种状态随步进交替（收开幅度一致），每方向类别切换时立即交替；
-/// - 无输入：保持当前姿态；方向类别改变：立即交替相位；持续同向：按步进间隔交替；
-/// - 目标每帧合成后投影到当前墙面平面（贴墙），再沿墙面法线外推 climbHandWallNormalOffset
-///   （target 定位的是腕骨而非掌心：腕-掌厚度若不做外推，掌心/手会陷入墙内）；
-/// - 旋转：每帧写入 target.rotation = 墙面基准旋转（target 的 +Z 朝向墙面、+Y 沿墙向上）× 左右手
-///   各自偏移欧拉（climbLeft/RightHandRotationOffset）；climbHandWriteRotation 关闭时保持原旋转（对照调试用）；
-/// - 只移动 target 的位置/旋转（TRS），不写 constraint.weight——IK 权重由动画状态机全权管理
-///   （"arms and leg ik layer" 的 climb 状态经 climb ik.anim 把 right/left hand ik weight 置 1）。
+/// HandPosture/Handing 层（NormalClimbingStateBase 与 Handing 叶子）为空锚点：
+/// 结构一致性 + 未来手部变体扩展点。IK 权重由动画状态机管理，本族只写 target TRS。
 /// </summary>
-public class Unarmed_Normal_Climbing_State : PlayerStateBase
+public abstract class ClimbingStateBase : PlayerStateBase
 {
     #region 状态内结构常量（语义见注释；可调参数见 PlayerMotionValuesSO）
     /// <summary>墙面法线平方长度下限（无效法线判定）。</summary>

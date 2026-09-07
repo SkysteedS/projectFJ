@@ -62,9 +62,9 @@ public class PlayerControllerScript : MonoBehaviour
     Camera mainCamera;
 
     public GameObject Rifle;
-    /// <summary>手枪根（PlayerControllerScript.Pistol）：手枪正常状态左手 IK 目标参照；由你在场景拖入，未接入前可为空。</summary>
+    /// <summary>手枪根（PlayerControllerScript.Pistol）：手枪正常状态左手 IK 目标参照；由你在场景拖入，场景装配前可为空。</summary>
     public GameObject Pistol;
-    /// <summary>手雷根（PlayerControllerScript.Grenade）：拔/收手雷动画事件切挂点用（GrabGrenade/PutGrenade）；由你在场景拖入，未接入前可为空。</summary>
+    /// <summary>手雷根（PlayerControllerScript.Grenade）：拔/收手雷动画事件切挂点用（GrabGrenade/PutGrenade）；由你在场景拖入，场景装配前可为空。</summary>
     public GameObject Grenade;
     public GameObject RightHandWrist;
 

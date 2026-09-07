@@ -1,29 +1,20 @@
 using UnityEngine;
 
 /// <summary>
-/// 具体状态：空手（Unarmed）× 正常手部（Normal）× 登顶（ClimbTopOut）。
+/// BodyPosture 层 · 登顶走廊族基类（ClimbTopOut；当前仅 Unarmed×Normal 一支合法组合，
+/// 方案 A = 族行为宿主）。以原 Unarmed_Normal_ClimbTopOut_State 唯一实现为基线承载：
+/// - 悬挂手固定（MatchTarget）：进入瞬间从被固定手（ctx.TopOutGrabLeftHand，攀爬族写入）手骨上方
+///   垂直向下逐厘米扫描墙顶面得到抓取点（BeginGrabLock / TryScanGrabPoint），climb to end 真正开播后
+///   一次性下达 MatchTarget（窗口 = topOutMatchStart/EndNormalizedTime，默认 0.1 处精确落位）；
+/// - 碰撞体：进入即禁用 CharacterController（根运动/MatchTarget 需精确落位，防胶囊顶掉位移），
+///   OnAnimatorMove 把 deltaPosition 直接加到 transform，退出恢复 CC；
+/// - 结束：Tag=ClimbToEnd 播放到 Values.topOutExitNormalizedTime（默认 0.9）请求回
+///   (ctx.Handing=Unarmed, Normal, Ground)（提前退出，收尾姿态交地面过渡衔接）。
 ///
-/// 职责（入边已补全：攀爬状态到顶探测命中 → 请求本状态）：
-/// - 机器切到本组合后，主体类 SyncAnimatorPostureParams 每帧写 body posture = 3，
-///   Animator 由 climb 状态进入 Tag=ClimbToEnd 的 climb to end 动画（一次性，约 3.83s）；
-/// - 悬挂手固定（MatchTarget）：“被固定的那只手”（ctx.TopOutGrabLeftHand，由攀爬状态按到顶探测
-///   选择的较高手写入）的抓取点 = 进入登顶瞬间从该手骨上方开始、垂直向下每隔 1cm 扫描墙顶面
-///   （见 BeginGrabLock / TryScanGrabPoint），而不是 IK target 快照（IK target 贴墙面、低于墙顶缘，
-///   直接快照会让手抓空）；待 climb to end 真正开始播放后对该手下达一次 MatchTarget，
-///   让动画“手按在缘上、身体悬挂→上撑”的位移与场景几何对齐；
-/// - 放手：一次性 MatchTarget 在 topOutMatchEnd（默认 0.1 = 动画 10%）处把被抓手精确匹配到
-///   墙顶抓取点（+ 可调偏移）；匹配到点后自然结束（无后续强制锁手），由动画根运动接管把身体带上平台；
-/// - 碰撞体：进入本状态即禁用 CharacterController——登顶的 MatchTarget/根运动位移需要【精确】落到
-///   墙顶抓取点，若仍走 CC.Move，角色胶囊与墙顶/平台边缘的碰撞会顶掉/滑走部分位移，手就抓不到点；
-///   禁用期间 OnAnimatorMove 直接把 deltaPosition 加到 transform，离开本状态时恢复 CC。
-/// - 位移：OnAnimatorMove 应用动画根运动——匹配期间 animator.deltaPosition 已含 MatchTarget 修正，
-///   无需脚本叠加位移；
-/// - 结束：检测 Tag=ClimbToEnd 动画是否播放到 Values.topOutExitNormalizedTime（默认 0.9），
-///   到达即请求退出到 Unarmed Normal Ground（提前于动画末段，让收尾姿态由地面过渡衔接）。
-///
-/// 数值参数见 PlayerMotionValuesSO【登顶】区（探测/匹配窗口全部可 Inspector 调参）。
+/// HandPosture/Handing 层（NormalClimbTopOutStateBase 与 Handing 叶子）为空锚点：
+/// 结构一致性 + 未来变体扩展点。数值参数见 PlayerMotionValuesSO【登顶】区。
 /// </summary>
-public class Unarmed_Normal_ClimbTopOut_State : PlayerStateBase
+public abstract class ClimbTopOutStateBase : PlayerStateBase
 {
     #region 状态内结构常量（语义见注释；可调参数见 PlayerMotionValuesSO）
     /// <summary>登顶动画 Tag（Animator 中 climb to end 状态的 m_Tag，见 Animator 控制器）。</summary>

@@ -16,6 +16,7 @@ using UnityEngine;
 /// 2. 本文件是运动数值的唯一定义来源（旧内嵌类已删除，资产数据不依赖任何旧文件）。
 /// 3. 只负责"算数"——速度插值 / 重力累积 / 跳跃初速反推，不含姿态判定与切换决策。
 ///    状态类经 PlayerContext.Values 访问；计算结果写回 PlayerContext.Motion。
+///    按 Handing 的档位查询（GroundTargetSpeed）属数据索引，是唯一的分支例外（非姿态判定）。
 ///
 /// 参数分组说明：字段按功能域分类（运动 / 瞄准 / 手部 IK / 切换 IK / 攀爬 / 登顶），
 /// 组内再按使用顺序排布；字段名是序列化键，整理时不可改名（见 code-conventions §2）。
@@ -359,32 +360,26 @@ public class PlayerMotionValuesSO : ScriptableObject
     public float JumpSpeed => Mathf.Sqrt(2f * Mathf.Abs(gravity) * jumpHeight);
 
     /// <summary>
-    /// 步枪（持枪）档位速度插值：目标 = 档位（走 1.5 / 跑 3.5）× 输入模长，恒加速度逼近。
+    /// 地面档位目标速度（按手持查询）：目标 = 该手持行走/奔跑档位 × 输入模长。
+    /// 常态地面与武器切换速度插值共用；Handing 层叶子不再各自重算目标公式。
     /// </summary>
-    public float MoveRifleSpeed(float current, float inputMagnitude, bool run, float deltaTime)
-        => Mathf.MoveTowards(current, (run ? rifleRunSpeed : rifleWalkSpeed) * inputMagnitude,
-                             moveAcceleration * deltaTime);
+    public float GroundTargetSpeed(float inputMagnitude, bool run, PlayerHanding handing)
+    {
+        switch (handing)
+        {
+            case PlayerHanding.Rifle:   return (run ? rifleRunSpeed   : rifleWalkSpeed)   * inputMagnitude;
+            case PlayerHanding.Pistol:  return (run ? pistolRunSpeed  : pistolWalkSpeed)  * inputMagnitude;
+            case PlayerHanding.Grenade: return (run ? grenadeRunSpeed : grenadeWalkSpeed) * inputMagnitude;
+            case PlayerHanding.Unarmed:
+            default:                    return (run ? unarmedRunSpeed : unarmedWalkSpeed)  * inputMagnitude;
+        }
+    }
 
     /// <summary>
-    /// 手枪（持枪）档位速度插值：目标 = 档位（走 2 / 跑 4，可调）× 输入模长，恒加速度逼近。
+    /// 地面档位速度插值（按手持查询档位）：常态 Normal×Ground 状态用它向 GroundTargetSpeed 恒加速逼近。
     /// </summary>
-    public float MovePistolSpeed(float current, float inputMagnitude, bool run, float deltaTime)
-        => Mathf.MoveTowards(current, (run ? pistolRunSpeed : pistolWalkSpeed) * inputMagnitude,
-                             moveAcceleration * deltaTime);
-
-    /// <summary>
-    /// 手雷（持有）档位速度插值：目标 = 档位（走 2 / 跑 4，可调）× 输入模长，恒加速度逼近。
-    /// </summary>
-    public float MoveGrenadeSpeed(float current, float inputMagnitude, bool run, float deltaTime)
-        => Mathf.MoveTowards(current, (run ? grenadeRunSpeed : grenadeWalkSpeed) * inputMagnitude,
-                             moveAcceleration * deltaTime);
-
-    /// <summary>
-    /// 无武器档位速度插值：目标 = 无武器档位（走 2 / 跑 4）× 输入模长，恒加速度逼近。
-    /// </summary>
-    public float MoveUnarmedSpeed(float current, float inputMagnitude, bool run, float deltaTime)
-        => Mathf.MoveTowards(current, (run ? unarmedRunSpeed : unarmedWalkSpeed) * inputMagnitude,
-                             moveAcceleration * deltaTime);
+    public float MoveGroundSpeed(float current, float inputMagnitude, bool run, float deltaTime, PlayerHanding handing)
+        => Mathf.MoveTowards(current, GroundTargetSpeed(inputMagnitude, run, handing), moveAcceleration * deltaTime);
 
     /// <summary>
     /// 瞄准档位速度插值：目标 = 步枪行走档 × 输入模长，恒加速度逼近。
